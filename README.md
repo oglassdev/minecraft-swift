@@ -52,8 +52,7 @@ swift build
 swift test
 ```
 
-Run those commands on Linux with Swift 6.0 or newer. The GitHub Actions workflow runs the
-core tests in the official `swift:6.0.3` Linux image when this repository is pushed.
+Run those commands on Linux with Swift 6.0 or newer. CI is intentionally not configured.
 The Apple app is intentionally outside the package target, so Linux never compiles Apple UI
 or shaders. No Linux graphical renderer is included.
 
@@ -103,7 +102,7 @@ Verified on November 1, 2026 with Swift 6.3.3 and Xcode 26.6 on an Apple Silicon
 - The iPhone 17 Pro simulator launches and renders the same scene in landscape.
 - Swift formatting and lint checks pass.
 
-Not verified: execution on Linux (no local Linux runtime; CI is configured but has not run),
+Not verified: execution on Linux (no local Linux runtime),
 physical iPhone rendering/signing, touch gestures, and physical relative mouse input.
 The UI automation's pointer drags did not provide usable relative mouse deltas, so mouse
 look still needs a hands-on check. Camera rotation logic is covered by the core tests.
@@ -113,4 +112,4 @@ look still needs a hands-on check. Camera rotation logic is covered by the core 
 Faithful Beta behavior remains future work: seeded terrain and chunk storage, fixed-step
 simulation, player collision and physics, block interactions, inventory, lighting, saving,
 audio, and any authorized asset work. The current scene is hand-built placeholder terrain.
-The repository is local and has no remote configured; nothing is published by this setup.
+The repository is private at https://github.com/oglassdev/minecraft-swift.
