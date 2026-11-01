@@ -1,0 +1,61 @@
+name: MinecraftSwift
+options:
+  minimumXcodeGenVersion: 2.44.0
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: 1
+packages:
+  MinecraftCore:
+    path: ..
+targets:
+  MinecraftMac:
+    type: application
+    productName: MinecraftSwift
+    platform: macOS
+    sources:
+      - Shared
+      - macOS
+    dependencies:
+      - package: MinecraftCore
+        product: MinecraftCore
+    settings:
+      base:
+        PRODUCT_NAME: MinecraftSwift
+        PRODUCT_BUNDLE_IDENTIFIER: dev.oglass.minecraft-swift.mac
+        INFOPLIST_KEY_CFBundleDisplayName: Minecraft Swift
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+        CODE_SIGN_IDENTITY: "-"
+  MinecraftIOS:
+    type: application
+    productName: MinecraftSwift
+    platform: iOS
+    sources:
+      - Shared
+      - iOS
+    dependencies:
+      - package: MinecraftCore
+        product: MinecraftCore
+    settings:
+      base:
+        PRODUCT_NAME: MinecraftSwift
+        PRODUCT_BUNDLE_IDENTIFIER: dev.oglass.minecraft-swift.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_CFBundleDisplayName: Minecraft Swift
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+schemes:
+  MinecraftMac:
+    build:
+      targets:
+        MinecraftMac: all
+  MinecraftIOS:
+    build:
+      targets:
+        MinecraftIOS: all

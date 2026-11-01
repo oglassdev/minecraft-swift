@@ -1,0 +1,466 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		18C35C021AB2979617AD5014 /* Blocks.metal in Sources */ = {isa = PBXBuildFile; fileRef = 14AFACAE47C97230F4E5A241 /* Blocks.metal */; };
+		1AD528C8C2C2F2CC4E923C15 /* Blocks.metal in Sources */ = {isa = PBXBuildFile; fileRef = 14AFACAE47C97230F4E5A241 /* Blocks.metal */; };
+		3A2586AE71DC775373CCF9E2 /* MinecraftApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */; };
+		4633328B02CEC0B9B094720A /* MetalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F4B952F8A1CF818887F68F /* MetalSurface.swift */; };
+		5C4F1FE62E0B4193EA886870 /* MinecraftApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */; };
+		6B1E85182533B1E9354F0116 /* GameSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17B87F7A60AE76D4378605FE /* GameSession.swift */; };
+		ABB4C0DCE8CE14865B40B0BF /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D2162A2DA2B0D412AD28CF /* Renderer.swift */; };
+		B1D46576FF1815155501DB20 /* MinecraftCore in Frameworks */ = {isa = PBXBuildFile; productRef = CCCAFB8838AD6DFBB0FF4704 /* MinecraftCore */; };
+		C813B40ECBDE87CB7B6282BF /* MetalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711268B74415EFF9FB5AB6FA /* MetalSurface.swift */; };
+		CF6C2A1A5A6B4E0C81BE05B3 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D2162A2DA2B0D412AD28CF /* Renderer.swift */; };
+		E90F8374CFA5F76F769C38E8 /* GameSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17B87F7A60AE76D4378605FE /* GameSession.swift */; };
+		FF6BEA826F209311C3D8AAA7 /* MinecraftCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1109B45F7949CE15BDA70592 /* MinecraftCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		14AFACAE47C97230F4E5A241 /* Blocks.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Blocks.metal; sourceTree = "<group>"; };
+		17B87F7A60AE76D4378605FE /* GameSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSession.swift; sourceTree = "<group>"; };
+		28D2162A2DA2B0D412AD28CF /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
+		2B2F57B5C9AEB26B02514B31 /* MinecraftSwift.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MinecraftSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5981FC4FBEFE68284120C6D4 /* minecraft-swift */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "minecraft-swift"; path = ..; sourceTree = SOURCE_ROOT; };
+		711268B74415EFF9FB5AB6FA /* MetalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalSurface.swift; sourceTree = "<group>"; };
+		A2CDE077C979AF2F22C87CF6 /* MinecraftSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MinecraftSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinecraftApp.swift; sourceTree = "<group>"; };
+		D1F4B952F8A1CF818887F68F /* MetalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalSurface.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7E522B2EEBDFA1D39A6B8A6A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1D46576FF1815155501DB20 /* MinecraftCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		91E4E9C64A5E0C47C72FC1F3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FF6BEA826F209311C3D8AAA7 /* MinecraftCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		02E61C27333D3E811C9BB20A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2B2F57B5C9AEB26B02514B31 /* MinecraftSwift.app */,
+				A2CDE077C979AF2F22C87CF6 /* MinecraftSwift.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		14C21291693776C00B5DAA4D /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				711268B74415EFF9FB5AB6FA /* MetalSurface.swift */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+		64B0CC7CB9D1BD9FDA5FF447 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				14AFACAE47C97230F4E5A241 /* Blocks.metal */,
+				17B87F7A60AE76D4378605FE /* GameSession.swift */,
+				AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */,
+				28D2162A2DA2B0D412AD28CF /* Renderer.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		CF702CE4C08552933E27E4EB /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				D1F4B952F8A1CF818887F68F /* MetalSurface.swift */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		F0AD3FB2018B17325C48CB8C /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				5981FC4FBEFE68284120C6D4 /* minecraft-swift */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		FEC975BA729C1EA676410296 = {
+			isa = PBXGroup;
+			children = (
+				14C21291693776C00B5DAA4D /* iOS */,
+				CF702CE4C08552933E27E4EB /* macOS */,
+				F0AD3FB2018B17325C48CB8C /* Packages */,
+				64B0CC7CB9D1BD9FDA5FF447 /* Shared */,
+				02E61C27333D3E811C9BB20A /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8C6B2A5B0F40D9475C4FA248 /* MinecraftIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25537AE6D07B4E99AD058C18 /* Build configuration list for PBXNativeTarget "MinecraftIOS" */;
+			buildPhases = (
+				0DEAB77EBA19F9833DC43E7A /* Sources */,
+				91E4E9C64A5E0C47C72FC1F3 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MinecraftIOS;
+			packageProductDependencies = (
+				1109B45F7949CE15BDA70592 /* MinecraftCore */,
+			);
+			productName = MinecraftIOS;
+			productReference = 2B2F57B5C9AEB26B02514B31 /* MinecraftSwift.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F8995143117BA04ED6F456A9 /* MinecraftMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4C63972AA9F88A8724D51230 /* Build configuration list for PBXNativeTarget "MinecraftMac" */;
+			buildPhases = (
+				47BF2B78CE62587B75BCEF8E /* Sources */,
+				7E522B2EEBDFA1D39A6B8A6A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MinecraftMac;
+			packageProductDependencies = (
+				CCCAFB8838AD6DFBB0FF4704 /* MinecraftCore */,
+			);
+			productName = MinecraftMac;
+			productReference = A2CDE077C979AF2F22C87CF6 /* MinecraftSwift.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		88FF10AF448169289D8238DE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 231792B2932BAA546BBAF35A /* Build configuration list for PBXProject "MinecraftSwift" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = FEC975BA729C1EA676410296;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ED8F625B8778AE064EBE0C69 /* XCLocalSwiftPackageReference ".." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 02E61C27333D3E811C9BB20A /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F8995143117BA04ED6F456A9 /* MinecraftMac */,
+				8C6B2A5B0F40D9475C4FA248 /* MinecraftIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0DEAB77EBA19F9833DC43E7A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				18C35C021AB2979617AD5014 /* Blocks.metal in Sources */,
+				E90F8374CFA5F76F769C38E8 /* GameSession.swift in Sources */,
+				C813B40ECBDE87CB7B6282BF /* MetalSurface.swift in Sources */,
+				5C4F1FE62E0B4193EA886870 /* MinecraftApp.swift in Sources */,
+				ABB4C0DCE8CE14865B40B0BF /* Renderer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		47BF2B78CE62587B75BCEF8E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1AD528C8C2C2F2CC4E923C15 /* Blocks.metal in Sources */,
+				6B1E85182533B1E9354F0116 /* GameSession.swift in Sources */,
+				4633328B02CEC0B9B094720A /* MetalSurface.swift in Sources */,
+				3A2586AE71DC775373CCF9E2 /* MinecraftApp.swift in Sources */,
+				CF6C2A1A5A6B4E0C81BE05B3 /* Renderer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0B6DF46B147217106A3FD546 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		19F8C811C44722905DFC67FA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.oglass.minecraft-swift.mac";
+				PRODUCT_NAME = MinecraftSwift;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		2C6DDFFEC00568E91BB33182 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.oglass.minecraft-swift.mac";
+				PRODUCT_NAME = MinecraftSwift;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		61CF3CB6225E39DBE0391E1A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.oglass.minecraft-swift.ios";
+				PRODUCT_NAME = MinecraftSwift;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		7D3FDCBAC6563C2721498E82 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.oglass.minecraft-swift.ios";
+				PRODUCT_NAME = MinecraftSwift;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C2EE3F5EFAF57560C4124822 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		231792B2932BAA546BBAF35A /* Build configuration list for PBXProject "MinecraftSwift" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C2EE3F5EFAF57560C4124822 /* Debug */,
+				0B6DF46B147217106A3FD546 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		25537AE6D07B4E99AD058C18 /* Build configuration list for PBXNativeTarget "MinecraftIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7D3FDCBAC6563C2721498E82 /* Debug */,
+				61CF3CB6225E39DBE0391E1A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4C63972AA9F88A8724D51230 /* Build configuration list for PBXNativeTarget "MinecraftMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				19F8C811C44722905DFC67FA /* Debug */,
+				2C6DDFFEC00568E91BB33182 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		ED8F625B8778AE064EBE0C69 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1109B45F7949CE15BDA70592 /* MinecraftCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MinecraftCore;
+		};
+		CCCAFB8838AD6DFBB0FF4704 /* MinecraftCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MinecraftCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 88FF10AF448169289D8238DE /* Project object */;
+}
