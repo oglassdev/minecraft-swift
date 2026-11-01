@@ -35,6 +35,10 @@ struct GameChatOverlay: View {
                         }
                     }
                     if session.chatOpen {
+                        if session.isSleeping {
+                            BetaButton(title: "Leave Bed", session: session) { session.leaveBed() }.offset(
+                                x: CGFloat(r.width / 2 - 100), y: CGFloat(r.height - 40))
+                        }
                         let blink = Int(max(0, time.date.timeIntervalSince(chatStarted)) * 20) / 6 % 2 == 0
                         Rectangle().fill(.black.opacity(0.5)).frame(width: CGFloat(r.width - 4), height: 12)
                             .offset(x: 2, y: CGFloat(r.height - 14))
@@ -78,6 +82,10 @@ struct GameChatOverlay: View {
         message = ""
     }
     private func cancel() {
+        if session.isSleeping {
+            session.leaveBed()
+            return
+        }
         session.chatOpen = false
         session.resetInput()
         message = ""

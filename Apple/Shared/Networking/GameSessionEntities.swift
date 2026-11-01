@@ -132,7 +132,9 @@ extension GameSession {
                 }
             }
         case .animation(let id, let animation):
-            if id == state.localEntityID && animation == 3 { wakeFromBed(setSpawn: false) }
+            if id == state.localEntityID && animation == 3 {
+                wakeFromBed(setSpawn: false, immediately: false)
+            }
             entitySimulation.update(id: Int64(id)) { entity in
                 if animation == 1 {
                     entity.attackCooldown = 6
@@ -152,8 +154,6 @@ extension GameSession {
         case .sleep(let id, let mode, let position):
             if id == state.localEntityID && mode == 0 {
                 beginSleeping(at: position)
-                sleepTicks = 1
-                resetInput()
             } else {
                 entitySimulation.update(id: Int64(id)) { $0.targetPosition = center(of: position) }
             }

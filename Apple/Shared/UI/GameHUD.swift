@@ -17,6 +17,10 @@ struct GameHUD: View {
                 ZStack(alignment: .topLeading) {
                     if !session.hideHUD && !session.worldMenuOpen {
                         hud(width: resolution.width, height: resolution.height)
+                        if session.sleepTicks > 0 {
+                            Color(red: 16.0 / 255, green: 16.0 / 255, blue: 32.0 / 255)
+                                .opacity(session.sleepOpacity)
+                        }
                         if session.showDebug { debugOverlay }
                         if let title = session.achievementNotice {
                             achievementToast(title).offset(

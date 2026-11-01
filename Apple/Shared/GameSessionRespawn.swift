@@ -3,15 +3,17 @@ import MinecraftCore
 
 extension GameSession {
     func beginSleeping(at bed: BlockPosition) {
-        guard world.dimension == 0, sleepTicks == 0, player.health > 0,
-            abs(player.position.x - Double(bed.x)) <= 3,
-            abs(player.eyePositionDouble.y - Double(bed.y)) <= 2,
-            abs(player.position.z - Double(bed.z)) <= 3
-        else { return }
-        let time = worldTime % 24000
-        guard time > 12541 && time < 23458 else {
-            postChat("You can only sleep at night")
-            return
+        guard !isSleeping, player.health > 0 else { return }
+        if !isMultiplayer {
+            guard world.dimension == 0,
+                abs(player.position.x - Double(bed.x)) <= 3,
+                abs(player.eyePositionDouble.y - Double(bed.y)) <= 2,
+                abs(player.position.z - Double(bed.z)) <= 3
+            else { return }
+            guard weather.skylightSubtraction(time: worldTime, dimension: world.dimension) >= 4 else {
+                postChat("You can only sleep at night")
+                return
+            }
         }
         sleepingBed = bed
         let facing = Int(world.state(at: bed)?.metadata ?? 0) & 3
@@ -21,11 +23,49 @@ extension GameSession {
                 Double(bed.x) + Double(offset.x), Double(bed.y) + Double(Float(0.9375)),
                 Double(bed.z) + Double(offset.y)))
         camera.setPosition(player.eyePosition)
-        sleepTicks = 1
+        sleepTicks = 0
+        if isMultiplayer { chatOpen = true }
         resetInput()
     }
 
-    func wakeFromBed(setSpawn: Bool) {
+    func tickSleep() {
+        if let bed = sleepingBed {
+            resetInput()
+            guard isMultiplayer || (world[bed] == .bed && player.health > 0) else {
+                wakeFromBed(setSpawn: false)
+                return
+            }
+            sleepTicks = min(100, sleepTicks + 1)
+            guard !isMultiplayer else { return }
+            if sleepTicks >= 100 {
+                worldTime += 24000 - worldTime % 24000
+                weather.stopPrecipitation()
+                wakeFromBed(setSpawn: true, immediately: false)
+            } else if weather.skylightSubtraction(time: worldTime, dimension: world.dimension) < 4 {
+                wakeFromBed(setSpawn: true, immediately: false)
+            }
+        } else if sleepTicks > 0 {
+            sleepTicks += 1
+            if sleepTicks >= 110 { sleepTicks = 0 }
+        }
+    }
+
+    var sleepOpacity: Double {
+        let fade = sleepTicks > 100 ? 1 - Float(sleepTicks - 100) / 10 : Float(sleepTicks) / 100
+        return Double(Int(220 * fade)) / 255
+    }
+
+    func leaveBed() {
+        guard isSleeping else { return }
+        if let multiplayer {
+            multiplayer.client?.send(.entityAction(entityID: multiplayer.localEntityID, action: 3))
+        } else {
+            chatOpen = false
+            wakeFromBed(setSpawn: false)
+        }
+    }
+
+    func wakeFromBed(setSpawn: Bool, immediately: Bool = true) {
         player.endSleeping()
         if let bed = sleepingBed, world[bed] == .bed {
             let exit = bedRespawnExit(at: bed, in: world) ?? BlockPosition(bed.x, bed.y + 1, bed.z)
@@ -35,7 +75,9 @@ extension GameSession {
             if setSpawn { bedSpawn = bed }
         }
         sleepingBed = nil
-        sleepTicks = 0
+        sleepTicks = immediately ? 0 : 100
+        if isMultiplayer { chatOpen = false }
+        resetInput()
     }
 
     /// BlockBed's two neighboring 3×3 scans require actual air above a normal cube.

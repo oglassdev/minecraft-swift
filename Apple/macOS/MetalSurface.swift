@@ -33,6 +33,7 @@ final class MacMetalView: MTKView {
                 session.$inventoryOpen, session.$isPaused, session.$chatOpen, session.$signEditorOpen,
                 session.$worldMenuOpen, session.$showDeathScreen, session.$isLoading
             )
+            .merge(with: session.$sleepingBed.map { $0 != nil })
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.synchronizeMouseCapture() }
             .store(in: &subscriptions)

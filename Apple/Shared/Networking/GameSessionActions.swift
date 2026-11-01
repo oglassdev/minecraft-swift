@@ -129,7 +129,7 @@ extension GameSession {
     func sendChat(_ message: String) {
         let text = limitedJavaString(message.trimmingCharacters(in: .whitespacesAndNewlines), limit: 100)
         if !text.isEmpty { multiplayer?.client?.send(.chat(text)) }
-        chatOpen = false
+        chatOpen = isSleeping
         resetInput()
     }
 
@@ -159,7 +159,9 @@ extension GameSession {
 
     func dismissOverlay() {
         guard !showDeathScreen else { return }
-        if signEditorOpen {
+        if isSleeping {
+            leaveBed()
+        } else if signEditorOpen {
             finishSignEditing()
         } else if chatOpen {
             chatOpen = false

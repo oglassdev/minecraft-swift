@@ -109,7 +109,8 @@ final class GameSession: ObservableObject {
     var cursor: ItemStack?
     var spawn = BlockPosition(8, 100, 8)
     var bedSpawn: BlockPosition?
-    var sleepingBed: BlockPosition?
+    @Published var sleepingBed: BlockPosition?
+    var isSleeping: Bool { sleepingBed != nil }
     var blockSimulation = BlockSimulation(seed: 0)
     var entitySimulation = EntitySimulation(seed: 0)
     let audio = AudioManager()
@@ -231,11 +232,11 @@ final class GameSession: ObservableObject {
         let inventoryBefore = inventory
         let groundedBefore = player.onGround
         let inputEnabled =
-            !inventoryOpen && !chatOpen && !signEditorOpen && !showDeathScreen && sleepTicks == 0
+            !inventoryOpen && !chatOpen && !signEditorOpen && !showDeathScreen && !isSleeping
         let forward = inputEnabled ? axis(.forward, .backward) + touchMovement.y : 0
         let strafe = inputEnabled ? axis(.right, .left) + touchMovement.x : 0
         entitySimulation.setRidingInput(forward: forward, strafe: strafe)
-        if flight {
+        if flight && !isSleeping {
             camera.move(
                 MovementInput(
                     forward: forward, right: strafe,
@@ -269,26 +270,15 @@ final class GameSession: ObservableObject {
             in: world, near: player, time: worldTime, worldRandom: &worldTickState.random)
         worldTime += 1
         tickItemState()
-        if sleepTicks > 0 {
-            resetInput()
-            if player.health < healthBefore || sleepingBed.map({ world[$0] != .bed }) != false {
-                wakeFromBed(setSpawn: false)
-            } else {
-                sleepTicks += 1
-                if sleepTicks >= 100 {
-                    worldTime += 24000 - worldTime % 24000
-                    weather.stopPrecipitation()
-                    wakeFromBed(setSpawn: true)
-                }
-            }
-        }
+        if isSleeping && player.health < healthBefore { wakeFromBed(setSpawn: false) }
+        tickSleep()
         updateTarget()
         dispatch(
             blockSimulation.tick(
                 world: &world, players: [player.position], time: worldTime,
                 entities: entitySimulation.entities, weather: &weather, tickState: &worldTickState,
                 includeBlockEntities: false))
-        if sleepTicks > 0 && player.health < healthBefore { wakeFromBed(setSpawn: false) }
+        if isSleeping && player.health < healthBefore { wakeFromBed(setSpawn: false) }
         rainStrength = weather.rainStrength
         thunderStrength = weather.weightedThunderStrength
         recordStatisticsTick(
@@ -329,6 +319,7 @@ final class GameSession: ObservableObject {
     }
 
     func primaryAction(isPressed: Bool) {
+        guard !isPressed || !isSleeping else { return }
         if isMultiplayer {
             multiplayerPrimaryAction(isPressed: isPressed)
             return
@@ -436,6 +427,7 @@ final class GameSession: ObservableObject {
     }
 
     func secondaryAction() {
+        guard !isSleeping else { return }
         if isMultiplayer {
             multiplayerSecondaryAction()
             return
@@ -574,7 +566,7 @@ final class GameSession: ObservableObject {
     func cycleHotbar(_ direction: Int) { selectHotbar((inventory.selectedHotbar - direction % 9 + 9) % 9) }
 
     func toggleInventory() {
-        guard !showDeathScreen else { return }
+        guard !showDeathScreen, !isSleeping else { return }
         if isMultiplayer {
             toggleMultiplayerInventory()
             return
@@ -597,7 +589,7 @@ final class GameSession: ObservableObject {
 
     func togglePause() {
         guard !showDeathScreen else { return }
-        if !isMultiplayer && sleepTicks > 0 { wakeFromBed(setSpawn: false) }
+        if !isMultiplayer && isSleeping { wakeFromBed(setSpawn: false) }
         isPaused.toggle()
         resetInput()
         syncAudioPause()

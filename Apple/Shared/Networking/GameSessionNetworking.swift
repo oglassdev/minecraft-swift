@@ -199,6 +199,7 @@ extension GameSession {
             isLoading = true
             isPaused = false
             inventoryOpen = false
+            sleepingBed = nil
             sleepTicks = 0
             closeMultiplayerWindow(send: false)
         case .playerPositionLook(let x, let eyeY, let feetY, let z, let yaw, let pitch, let grounded):
@@ -333,7 +334,7 @@ extension GameSession {
             lastSecondaryTick = tickCount
         }
         let active =
-            !inventoryOpen && !isPaused && !chatOpen && !signEditorOpen && sleepTicks == 0 && !showDeathScreen
+            !inventoryOpen && !isPaused && !chatOpen && !signEditorOpen && !isSleeping && !showDeathScreen
         let forward = active ? axis(.forward, .backward) + touchMovement.y : 0
         let strafe = active ? axis(.right, .left) + touchMovement.x : 0
         entitySimulation.tickRemote()
@@ -376,6 +377,7 @@ extension GameSession {
         worldTime += 1
         tickCount += 1
         tickItemState()
+        tickSleep()
         updateTarget()
         advanceMultiplayerMining()
         rainStrength =
