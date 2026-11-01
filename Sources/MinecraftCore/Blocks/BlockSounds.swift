@@ -1,5 +1,36 @@
 public enum BlockSounds {
     public static func step(for kind: BlockKind, at position: SIMD3<Double>) -> BlockEvent {
+        let sound = properties(for: kind)
+        return .sound(name: sound.name, position: position, volume: sound.volume * 0.15, pitch: sound.pitch)
+    }
+
+    public static func placement(for kind: BlockKind, at position: SIMD3<Double>) -> BlockEvent {
+        let sound = properties(for: kind)
+        return .sound(
+            name: sound.name, position: position, volume: (sound.volume + 1) / 2, pitch: sound.pitch * 0.8)
+    }
+
+    public static func hit(for kind: BlockKind, at position: SIMD3<Double>) -> BlockEvent {
+        let sound = properties(for: kind)
+        return .sound(
+            name: sound.name, position: position, volume: (sound.volume + 1) / 8, pitch: sound.pitch * 0.5)
+    }
+
+    public static func breaking(for kind: BlockKind, at position: SIMD3<Double>) -> BlockEvent {
+        let sound = properties(for: kind)
+        let name: String
+        if [.glass, .ice, .glowstone].contains(kind) {
+            name = "random.glass"
+        } else if sound.name == "step.sand" {
+            name = "step.gravel"
+        } else {
+            name = sound.name
+        }
+        return .sound(
+            name: name, position: position, volume: (sound.volume + 1) / 2, pitch: sound.pitch * 0.8)
+    }
+
+    private static func properties(for kind: BlockKind) -> (name: String, volume: Float, pitch: Float) {
         let name: String
         let volume: Float
         let pitch: Float
@@ -38,6 +69,6 @@ public enum BlockSounds {
             volume = 1
             pitch = 1
         }
-        return .sound(name: name, position: position, volume: volume * 0.15, pitch: pitch)
+        return (name, volume, pitch)
     }
 }

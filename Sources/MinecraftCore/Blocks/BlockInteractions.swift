@@ -3,13 +3,36 @@ import Foundation
 public enum BlockInteractions {
     public static func use(
         hit: BlockHit, holding: ItemStack?, yaw: Float, playerBounds: AxisAlignedBox,
-        world: inout BlockWorld, health: Int = 20
+        world: inout BlockWorld, health: Int = 20, placementBlockers: [AxisAlignedBox] = []
     ) -> BlockUseResult {
         var random = JavaRandom(seed: world.seed ^ Int64(truncatingIfNeeded: world.revision))
+        return use(
+            hit: hit, holding: holding, yaw: yaw, playerBounds: playerBounds,
+            world: &world, health: health, placementBlockers: placementBlockers, random: &random)
+    }
+
+    public static func use(
+        hit: BlockHit, holding: ItemStack?, yaw: Float, playerBounds: AxisAlignedBox,
+        world: inout BlockWorld, health: Int = 20, placementBlockers: [AxisAlignedBox] = [],
+        random: inout JavaRandom
+    ) -> BlockUseResult {
+        var itemRandom = JavaRandom(seed: world.seed ^ Int64(truncatingIfNeeded: world.revision))
+        return use(
+            hit: hit, holding: holding, yaw: yaw, playerBounds: playerBounds,
+            world: &world, health: health, placementBlockers: placementBlockers, random: &random,
+            itemRandom: &itemRandom)
+    }
+
+    public static func use(
+        hit: BlockHit, holding: ItemStack?, yaw: Float, playerBounds: AxisAlignedBox,
+        world: inout BlockWorld, health: Int = 20, placementBlockers: [AxisAlignedBox] = [],
+        random: inout JavaRandom, itemRandom: inout JavaRandom
+    ) -> BlockUseResult {
         let initial = activateOre(at: hit.position, world: &world, random: &random)
         var result = performUse(
             hit: hit, holding: holding, yaw: yaw, playerBounds: playerBounds,
-            world: &world, health: health)
+            world: &world, health: health, placementBlockers: placementBlockers, random: &random,
+            itemRandom: &itemRandom)
         result.events = initial.events + result.events
         result.changedPositions = initial.changedPositions + result.changedPositions
         return result
@@ -22,7 +45,7 @@ public enum BlockInteractions {
         guard let state = world.state(at: p) else { return .init() }
         switch state.kind {
         case .woodenDoor, .ironDoor, .trapdoor, .lever, .stoneButton, .cake:
-            return activate(at: p, holding: holding, world: &world, health: health)
+            return activate(at: p, holding: holding, world: &world, health: health, random: &random)
         case .redstoneOre, .litRedstoneOre:
             return activateOre(at: p, world: &world, random: &random)
         case .noteBlock:
@@ -128,47 +151,23 @@ public enum BlockInteractions {
 
     private static func performUse(
         hit: BlockHit, holding: ItemStack?, yaw: Float, playerBounds: AxisAlignedBox,
-        world: inout BlockWorld, health: Int = 20
+        world: inout BlockWorld, health: Int, placementBlockers: [AxisAlignedBox], random: inout JavaRandom,
+        itemRandom: inout JavaRandom
     ) -> BlockUseResult {
-        var result = activate(at: hit.position, holding: holding, world: &world, health: health)
+        var result = activate(
+            at: hit.position, holding: holding, world: &world, health: health, random: &random)
         if result.handled { return result }
         guard let holding, holding.count > 0 else { return result }
         result.itemUsed = ![325, 326, 327, 335].contains(holding.id)
         let p = hit.position
-        let target = world[p] == .snowLayer ? p : hit.adjacentPosition
+        let target = hit.adjacentPosition
 
-        if holding.id == 325 {
-            guard let state = world.state(at: p), state.metadata == 0, state.kind.isLiquid else {
-                return result
-            }
-            world.setBlock(nil, at: p)
-            result.handled = true
-            result.replacement = ItemStack(id: BlockPlacement.isWater(state.kind) ? 326 : 327)
-            result.replaceHeldStack = true
-            result.changedPositions = [p]
-            return result
-        }
-        if holding.id == 326 || holding.id == 327 {
-            guard (0..<128).contains(target.y), world[target]?.isMaterialSolid != true else { return result }
-            result.handled = true
-            result.replacement = ItemStack(id: 325)
-            result.replaceHeldStack = true
-            if holding.id == 326 && world.dimension == -1 {
-                result.events = [sound("random.fizz", at: target)]
-                for _ in 0..<8 {
-                    result.events.append(.particle(name: "largesmoke", position: target.center))
-                }
-                return result
-            }
-            world.setBlock(BlockState(holding.id == 326 ? .water : .lava), at: target)
-            result.changedPositions = [target]
-            return result
-        }
-        if holding.id == 335 {
-            result.handled = true
-            result.replacement = ItemStack(id: 325)
-            result.replaceHeldStack = true
-            return result
+        if [UInt16(325), 326, 327, 335].contains(holding.id) {
+            return useBucket(
+                hit: hit, holding: holding, world: &world,
+                eye: SIMD3(
+                    (playerBounds.min.x + playerBounds.max.x) / 2, playerBounds.min.y + 1.62,
+                    (playerBounds.min.z + playerBounds.max.z) / 2), random: &random)
         }
         if (290...294).contains(holding.id) {
             let state = world[p]
@@ -178,7 +177,7 @@ public enum BlockInteractions {
                 result.handled = true
                 result.durabilityDamage = 1
                 result.changedPositions = [p]
-                result.events = [sound("step.gravel", at: p)]
+                result.events = [BlockSounds.placement(for: .farmland, at: p.center)]
             }
             return result
         }
@@ -193,7 +192,7 @@ public enum BlockInteractions {
             return result
         }
         if holding.id == 351 && holding.damage == 15 {
-            return applyBoneMeal(at: p, world: &world)
+            return applyBoneMeal(at: p, world: &world, random: &random, itemRandom: &itemRandom)
         }
         if holding.id == 259 {
             result.handled = true
@@ -201,7 +200,7 @@ public enum BlockInteractions {
             if world[target] == nil && (0..<128).contains(target.y) {
                 world[target] = .fire
                 result.changedPositions = [target]
-                result.events = [sound("fire.ignite", at: target)]
+                result.events = [sound("fire.ignite", at: target, pitch: itemRandom.nextFloat() * 0.4 + 0.8)]
             }
             return result
         }
@@ -239,44 +238,130 @@ public enum BlockInteractions {
         guard blockID > 0, blockID <= 96, let kind = BlockKind(rawValue: UInt8(blockID)) else {
             return useInAir(holding: holding, health: health)
         }
-        if kind == .slab, hit.face.y == 1, world[p] == .slab,
-            world.state(at: p)?.metadata == UInt8(holding.damage & 15)
-        {
-            let state = BlockState(.doubleSlab, metadata: UInt8(holding.damage & 15))
-            guard !BlockCollision.boxes(for: state, at: p).contains(where: { $0.intersects(playerBounds) })
-            else { return result }
-            world.setBlock(state, at: p)
-            result.handled = true
-            result.consumed = 1
-            result.changedPositions = [p]
-            return result
-        }
-        guard (0..<128).contains(target.y), BlockPlacement.isReplaceable(world.state(at: target)),
-            let state = BlockPlacement.placementState(
-                kind: kind, damage: holding.damage, face: hit.face, yaw: yaw),
-            BlockPlacement.canRemain(state, at: target, in: world),
-            !BlockCollision.boxes(for: state, at: target).contains(where: { $0.intersects(playerBounds) })
+        let blockTarget = world[p] == .snowLayer ? p : target
+        let placementFace = world[p] == .snowLayer ? BlockPosition(0, -1, 0) : hit.face
+        let reedItem = [UInt16(331), 338, 354, 356].contains(holding.id)
+        if !reedItem && blockTarget.y == 127 && kind.isMaterialSolid { return result }
+        if reedItem { result.handled = true }
+        guard (0..<128).contains(blockTarget.y), BlockPlacement.isReplaceable(world.state(at: blockTarget)),
+            let state = BlockPlacement.resolvedPlacement(
+                kind: kind, damage: holding.damage, face: placementFace, yaw: yaw, at: blockTarget,
+                world: world),
+            !BlockCollision.boxes(for: state, at: blockTarget).contains(where: { box in
+                box.intersects(playerBounds) || placementBlockers.contains(where: { box.intersects($0) })
+            })
         else { return result }
-        if kind == .chest && !canPlaceChest(at: target, world: world) { return result }
+        if kind == .chest && !canPlaceChest(at: blockTarget, world: world) { return result }
         var placedState = state
         if kind == .piston || kind == .stickyPiston {
             let center = (playerBounds.min + playerBounds.max) / 2
             let eye = playerBounds.min.y + 1.82
-            if abs(center.x - Double(target.x)) < 2 && abs(center.z - Double(target.z)) < 2 {
-                if eye - Double(target.y) > 2 {
+            if abs(center.x - Double(blockTarget.x)) < 2 && abs(center.z - Double(blockTarget.z)) < 2 {
+                if eye - Double(blockTarget.y) > 2 {
                     placedState.metadata = 1
-                } else if Double(target.y) - eye > 0 {
+                } else if Double(blockTarget.y) - eye > 0 {
                     placedState.metadata = 0
                 }
             }
         }
-        world.setBlock(placedState, at: target)
-        if let tile = BlockEntity.initial(for: kind) { world.setBlockEntity(tile, at: target) }
+        if kind == .lever && placedState.metadata == 5 {
+            placedState.metadata += UInt8(random.nextInt(bound: 2))
+        }
+        world.setBlock(placedState, at: blockTarget)
+        if let tile = BlockEntity.initial(for: kind) { world.setBlockEntity(tile, at: blockTarget) }
         result.handled = true
         result.consumed = 1
-        result.changedPositions = [target]
-        result.events = [sound(kind == .wood || kind == .planks ? "step.wood" : "step.stone", at: target)]
+        result.changedPositions = [blockTarget]
+        if kind == .slab || kind == .doubleSlab {
+            let below = blockTarget.adding(BlockPosition(0, -1, 0))
+            if world[below] == .slab && world.state(at: below)?.metadata == placedState.metadata {
+                world.setBlock(nil, at: blockTarget)
+                world.setBlock(BlockState(.doubleSlab, metadata: placedState.metadata), at: below)
+                result.changedPositions.append(below)
+            }
+        }
+        result.events = [BlockSounds.placement(for: kind, at: blockTarget.center)]
         return result
+    }
+
+    public static func useBucket(
+        hit: BlockHit, holding: ItemStack, world: inout BlockWorld,
+        eye: SIMD3<Double>, random: inout JavaRandom
+    ) -> BlockUseResult {
+        var result = BlockUseResult()
+        guard holding.count > 0 else { return result }
+        if holding.id == 325 {
+            guard let state = world.state(at: hit.position), state.metadata == 0, state.kind.isLiquid else {
+                return result
+            }
+            world.setBlock(nil, at: hit.position)
+            result.handled = true
+            result.replacement = ItemStack(id: BlockPlacement.isWater(state.kind) ? 326 : 327)
+            result.replaceHeldStack = true
+            result.changedPositions = [hit.position]
+        } else if holding.id == 326 || holding.id == 327 {
+            let target = hit.adjacentPosition
+            guard world[target]?.isMaterialSolid != true else { return result }
+            result.handled = true
+            result.replacement = ItemStack(id: 325)
+            result.replaceHeldStack = true
+            if holding.id == 326 && world.dimension == -1 {
+                result.events = [
+                    .sound(
+                        name: "random.fizz", position: eye + SIMD3(repeating: 0.5), volume: 0.5,
+                        pitch: 2.6 + (random.nextFloat() - random.nextFloat()) * 0.8)
+                ]
+                for _ in 0..<8 {
+                    result.events.append(
+                        .particle(
+                            name: "largesmoke",
+                            position: SIMD3(
+                                Double(target.x) + Double.random(in: 0..<1),
+                                Double(target.y) + Double.random(in: 0..<1),
+                                Double(target.z) + Double.random(in: 0..<1))))
+                }
+            } else {
+                world.setBlock(BlockState(holding.id == 326 ? .water : .lava), at: target)
+                if (0..<128).contains(target.y) { result.changedPositions = [target] }
+            }
+        } else if holding.id == 335 {
+            result.handled = true
+            result.replacement = ItemStack(id: 325)
+            result.replaceHeldStack = true
+        }
+        return result
+    }
+
+    public static func didRemove(_ state: BlockState, at p: BlockPosition, world: inout BlockWorld)
+        -> [BlockPosition]
+    {
+        let radius: Int
+        switch state.kind {
+        case .wood: radius = 4
+        case .leaves: radius = 1
+        default: return []
+        }
+        let halo = radius + 1
+        guard p.y + halo >= 0, p.y - halo < 128,
+            (((p.x - halo) >> 4)...((p.x + halo) >> 4)).allSatisfy({ x in
+                (((p.z - halo) >> 4)...((p.z + halo) >> 4)).allSatisfy { z in
+                    world.chunks[ChunkPosition(x, z)] != nil
+                }
+            })
+        else { return [] }
+        var changed: [BlockPosition] = []
+        for x in -radius...radius {
+            for y in -radius...radius {
+                for z in -radius...radius {
+                    let position = p.adding(BlockPosition(x, y, z))
+                    if let leaf = world.state(at: position), leaf.kind == .leaves, leaf.metadata & 8 == 0 {
+                        world.setBlock(BlockState(.leaves, metadata: leaf.metadata | 8), at: position)
+                        changed.append(position)
+                    }
+                }
+            }
+        }
+        return changed
     }
 
     public static func useInAir(holding: ItemStack?, health: Int) -> BlockUseResult {
@@ -312,7 +397,8 @@ public enum BlockInteractions {
     }
 
     private static func activate(
-        at p: BlockPosition, holding: ItemStack?, world: inout BlockWorld, health: Int
+        at p: BlockPosition, holding: ItemStack?, world: inout BlockWorld, health: Int,
+        random: inout JavaRandom
     ) -> BlockUseResult {
         var result = BlockUseResult()
         guard let state = world.state(at: p) else { return result }
@@ -342,18 +428,22 @@ public enum BlockInteractions {
                 world.setBlock(BlockState(.woodenDoor, metadata: data | 8), at: upper)
             }
             result.changedPositions = [lower, upper]
-            result.events = [sound("random.door_open", at: lower)]
+            result.events = [doorSound(at: lower, random: &random)]
         case .trapdoor:
             result.handled = true
             world.setBlock(BlockState(.trapdoor, metadata: state.metadata ^ 4), at: p)
             result.changedPositions = [p]
-            result.events = [sound("random.door_open", at: p)]
+            result.events = [doorSound(at: p, random: &random)]
         case .lever, .stoneButton:
             result.handled = true
             guard state.kind != .stoneButton || state.metadata & 8 == 0 else { break }
             world.setBlock(BlockState(state.kind, metadata: state.metadata ^ 8), at: p)
             result.changedPositions = [p]
-            result.events = [sound("random.click", at: p)]
+            result.events = [
+                .sound(
+                    name: "random.click", position: p.center, volume: 0.3,
+                    pitch: state.metadata & 8 == 0 ? 0.6 : 0.5)
+            ]
         case .repeaterOff, .repeaterOn:
             result.handled = true
             world.setBlock(
@@ -399,13 +489,12 @@ public enum BlockInteractions {
             }
             if let record {
                 result.handled = true
-                result.events = [
-                    .dropItem(position: p.center + SIMD3(0, 0.7, 0), stack: ItemStack(id: record))
-                ]
+                result.events = containerDrops(.jukebox(record: record), at: p, random: &random)
                 world.setBlockEntity(.jukebox(record: nil), at: p)
                 world.setBlock(BlockState(.jukebox), at: p)
             } else if let holding, holding.id == 2256 || holding.id == 2257 {
                 result.handled = true
+                result.itemUsed = true
                 result.consumed = 1
                 world.setBlockEntity(.jukebox(record: holding.id), at: p)
                 world.setBlock(BlockState(.jukebox, metadata: 1), at: p)
@@ -474,25 +563,25 @@ public enum BlockInteractions {
         }
     }
 
-    private static func applyBoneMeal(at p: BlockPosition, world: inout BlockWorld) -> BlockUseResult {
+    private static func applyBoneMeal(
+        at p: BlockPosition, world: inout BlockWorld, random: inout JavaRandom, itemRandom: inout JavaRandom
+    ) -> BlockUseResult {
         var result = BlockUseResult()
         if world[p] == .wheat {
             world.setBlock(BlockState(.wheat, metadata: 7), at: p)
         } else if world[p] == .sapling {
-            var random = JavaRandom(seed: world.seed ^ Int64(truncatingIfNeeded: world.revision))
             let metadata = world.state(at: p)?.metadata ?? 0
             BlockGrowth.growTree(at: p, metadata: metadata, world: &world, random: &random)
         } else if world[p] == .grass {
-            var random = JavaRandom(seed: world.seed ^ Int64(truncatingIfNeeded: world.revision))
             for attempt in 0..<128 {
                 var target = p.adding(BlockPosition(0, 1, 0))
                 var valid = true
                 for _ in 0..<(attempt / 16) {
                     target = target.adding(
                         BlockPosition(
-                            random.nextInt(bound: 3) - 1,
-                            (random.nextInt(bound: 3) - 1) * random.nextInt(bound: 3) / 2,
-                            random.nextInt(bound: 3) - 1))
+                            itemRandom.nextInt(bound: 3) - 1,
+                            (itemRandom.nextInt(bound: 3) - 1) * itemRandom.nextInt(bound: 3) / 2,
+                            itemRandom.nextInt(bound: 3) - 1))
                     if world[target.adding(BlockPosition(0, -1, 0))] != .grass
                         || world[target]?.isNormalCube == true
                     {
@@ -502,10 +591,10 @@ public enum BlockInteractions {
                 }
                 guard valid, world[target] == nil else { continue }
                 let kind: BlockKind
-                if random.nextInt(bound: 10) != 0 {
+                if itemRandom.nextInt(bound: 10) != 0 {
                     kind = .tallGrass
                 } else {
-                    kind = random.nextInt(bound: 3) != 0 ? .dandelion : .rose
+                    kind = itemRandom.nextInt(bound: 3) != 0 ? .dandelion : .rose
                 }
                 world.setBlock(BlockState(kind, metadata: kind == .tallGrass ? 1 : 0), at: target)
                 result.changedPositions.append(target)
@@ -518,6 +607,12 @@ public enum BlockInteractions {
         result.consumed = 1
         result.changedPositions.append(p)
         return result
+    }
+
+    static func doorSound(at p: BlockPosition, random: inout JavaRandom) -> BlockEvent {
+        .sound(
+            name: Bool.random() ? "random.door_open" : "random.door_close", position: p.center,
+            volume: 1, pitch: random.nextFloat() * 0.1 + 0.9)
     }
 
     static func sound(_ name: String, at p: BlockPosition, pitch: Float = 1) -> BlockEvent {

@@ -47,7 +47,13 @@ enum EntityNBT {
             fields["Pos"] = doubles(entity.position + SIMD3(0, offset(entity), 0))
             fields["Motion"] = doubles(entity.velocity)
             fields["Rotation"] = .list(
-                .float, [.float(entity.yaw * 180 / .pi + 180), .float(-entity.pitch * 180 / .pi)])
+                .float,
+                [
+                    .float(
+                        entity.hasProjectileRotation
+                            ? 180 - entity.yaw * 180 / .pi : entity.yaw * 180 / .pi + 180),
+                    .float(entity.pitch * 180 / .pi * (entity.hasProjectileRotation ? 1 : -1)),
+                ])
             fields["Air"] = .short(Int16(clamping: entity.air))
             fields["Fire"] = .short(Int16(clamping: entity.fireTicks))
             fields["OnGround"] = .byte(entity.onGround ? 1 : 0)
@@ -136,8 +142,10 @@ enum EntityNBT {
         for axis in 0..<3 where abs(entity.velocity[axis]) > 10 { entity.velocity[axis] = 0 }
         let angles = fields["Rotation"]?.listValue?.compactMap(\.doubleValue)
         if let angles, angles.count == 2, angles.allSatisfy(\.isFinite) {
-            entity.yaw = Float((angles[0] - 180) * .pi / 180)
-            entity.pitch = Float(-angles[1] * .pi / 180)
+            entity.yaw = Float((entity.hasProjectileRotation ? 180 - angles[0] : angles[0] - 180) * .pi / 180)
+            entity.pitch = Float(angles[1] * .pi / 180 * (entity.hasProjectileRotation ? 1 : -1))
+            entity.previousYaw = entity.yaw
+            entity.previousPitch = entity.pitch
         }
         entity.onGround = (fields["OnGround"]?.integerValue ?? 0) != 0
         entity.air = Int(fields["Air"]?.integerValue ?? 300)

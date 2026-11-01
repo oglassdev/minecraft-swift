@@ -19,12 +19,13 @@ extension EntitySimulation {
         visible: Bool
     ) -> [BlockEvent] {
         var events: [BlockEvent] = []
+        entity.previousSquishAmount = entity.squishAmount
         let delta = player.position + SIMD3(0, Double(Float(1.62)), 0) - entity.position
         let distance = sqrt(EntityMotion.squaredLength(delta))
         if distance > 128 {
             entity.health = 0
             entity.lootDropped = true
-            entity.deathTicks = 20
+            entity.deathTicks = 21
             return []
         }
         if distance < 16 {
@@ -46,6 +47,7 @@ extension EntitySimulation {
                 }
                 entity.aiStrafe = 1 - random.nextFloat() * 2
                 entity.aiForward = Float(entity.metadata)
+                entity.squishAmount = 1
             } else {
                 entity.aiForward = 0
                 entity.aiStrafe = 0
@@ -53,11 +55,13 @@ extension EntitySimulation {
         }
         let grounded = entity.onGround
         _ = EntityMotion.living(
-            &entity, world: world, forward: entity.aiForward, strafe: -entity.aiStrafe, jump: jump)
+            &entity, world: world, forward: entity.aiForward, strafe: -entity.aiStrafe, jump: jump,
+            collisions: collisionView())
         entity.aiForward *= 0.98
         entity.aiStrafe *= 0.98
         let size = Int(entity.metadata)
         if entity.onGround && !grounded {
+            entity.squishAmount = -0.5
             for _ in 0..<(size * 8) {
                 let angle = random.nextFloat() * BetaMath.pi * 2
                 let scale = random.nextFloat() * 0.5 + 0.5
@@ -82,6 +86,7 @@ extension EntitySimulation {
                     name: "mob.slimeattack", position: entity.position, volume: 1,
                     pitch: (random.nextFloat() - random.nextFloat()) * 0.2 + 1))
         }
+        entity.squishAmount *= 0.6
         return events
     }
 }

@@ -38,9 +38,7 @@ enum BlockGrowth {
             !BlockPlacement.canRemain(state, at: p, in: world)
                 || !hasRequiredLight(state, at: p, world: world)
         {
-            changes.events = BlockMining.explosionDrops(for: state, roll: { random.nextInt(bound: $0) }).map {
-                .dropItem(position: p.center, stack: $0)
-            }
+            changes.events = BlockDrops.destroy(state, at: p, random: &random)
             world.setBlock(nil, at: p)
             changes.positions = [p]
             return changes
@@ -178,21 +176,30 @@ enum BlockGrowth {
                 if connected {
                     world.setBlock(BlockState(.leaves, metadata: state.metadata & 7), at: p)
                 } else {
-                    if random.nextInt(bound: 20) == 0 {
-                        changes.events.append(
-                            .dropItem(
-                                position: p.center,
-                                stack: ItemStack(id: 6, damage: UInt16(state.metadata & 3))))
-                    }
+                    changes.events += BlockDrops.destroy(state, at: p, random: &random)
                     world.setBlock(nil, at: p)
                 }
                 changes.positions.append(p)
             }
         case .snowLayer, .ice:
             if blockLight(at: p, world: world) > (state.kind == .ice ? 8 : 11) {
-                world.setBlock(state.kind == .ice ? BlockState(.water) : nil, at: p)
+                world.setBlock(state.kind == .ice ? BlockState(.stillWater) : nil, at: p)
                 changes.positions.append(p)
             }
+        case .torch where state.metadata == 0:
+            if let placed = BlockPlacement.resolvedPlacement(
+                kind: .torch, damage: 0,
+                face: BlockPosition(0, 0, 0), yaw: 0, at: p, world: world)
+            {
+                world.setBlock(placed, at: p)
+            } else {
+                changes.events = BlockDrops.destroy(state, at: p, random: &random)
+                world.setBlock(nil, at: p)
+            }
+            changes.positions.append(p)
+        case .lockedChest:
+            world.setBlock(nil, at: p)
+            changes.positions.append(p)
         case .litRedstoneOre:
             world[p] = .redstoneOre
             changes.positions.append(p)
@@ -241,6 +248,7 @@ enum BlockGrowth {
     private static func canGrowMushroom(at p: BlockPosition, world: BlockWorld) -> Bool {
         guard (0..<128).contains(p.y), world.chunks[p.chunk] != nil, world[p] == nil,
             world[p.adding(BlockPosition(0, -1, 0))]?.isOpaque == true
+                || world[p.adding(BlockPosition(0, -1, 0))] == .leaves
         else { return false }
         let light = world.light(at: p)
         return max(light.sky, light.block) < 13

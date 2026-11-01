@@ -13,7 +13,8 @@ struct ItemTextureAnimation {
 
     init() {
         let pixels =
-            VanillaTextures.loadRGBA("gui/items")?.pixels ?? [UInt8](repeating: 0, count: 256 * 256 * 4)
+            VanillaTextures.loadRGBA("gui/items", fromPack: false)?.pixels
+            ?? [UInt8](repeating: 0, count: 256 * 256 * 4)
         func tile(_ index: Int) -> [UInt8] {
             (0..<1024).map { offset in
                 let pixel = offset / 4
@@ -24,7 +25,9 @@ struct ItemTextureAnimation {
         }
         compass = tile(compassIndex)
         clock = tile(clockIndex)
-        dial = VanillaTextures.loadRGBA("misc/dial")?.pixels ?? [UInt8](repeating: 0, count: 1024)
+        dial =
+            VanillaTextures.loadRGBA("misc/dial", fromPack: false)?.pixels
+            ?? [UInt8](repeating: 0, count: 1024)
     }
 
     mutating func encode(

@@ -378,4 +378,192 @@ import Testing
         _ = simulation.blockChanged(at: BlockPosition(6, 3, 8), world: &world, time: 1)
         #expect(world[fire] == nil && world[BlockPosition(8, 4, 8)] == nil)
     }
+    @Test func physicalDropsMatchOriginalPositionsAndRandomConsumption() {
+        let p = BlockPosition(8, 1, 8)
+        let vectors: [(BlockKind, UInt8, Int64, Float, [UInt16], [UInt16], Int32)] = [
+            (.gravel, 0, 1234, 1, [13], [0], 1_362_132_786),
+            (.tallGrass, 1, 1234, 1, [], [], -208_917_030),
+            (.deadBush, 0, 1234, 1, [], [], 1_115_789_266),
+            (.wheat, 7, 1234, 0.3, [295], [0], -1_933_932_397),
+            (.lapisOre, 0, 7, 1, [351, 351, 351, 351, 351], [4, 4, 4, 4, 4], 498_287_849),
+            (.bed, 8, 1234, 1, [], [], -1_517_918_040),
+            (.woodenDoor, 8, 1234, 1, [], [], 1_115_789_266),
+            (.leaves, 10, 1234, 1, [], [], 1_115_789_266),
+        ]
+        for (kind, metadata, seed, chance, ids, damage, expectedRandom) in vectors {
+            var random = JavaRandom(seed: seed)
+            let drops = BlockDrops.destroy(
+                BlockState(kind, metadata: metadata), at: p,
+                chance: chance, random: &random)
+            let stacks = drops.compactMap { event -> ItemStack? in
+                if case .dropItem(_, let stack) = event { return stack }
+                return nil
+            }
+            #expect(stacks.map(\.id) == ids)
+            #expect(stacks.map(\.damage) == damage)
+            #expect(stacks.allSatisfy { $0.count == 1 })
+            let next = random.nextInt()
+            #expect(next == expectedRandom)
+            if kind == .gravel, case .dropItem(let position, _) = drops.first {
+                #expect(position == SIMD3(8.815950363874435, 1.31620854139328, 8.750311881303787))
+            }
+            if kind == .wheat, case .dropItem(let position, _) = drops.first {
+                #expect(position == SIMD3(8.750311851501465, 1.372002363204956, 8.470763206481934))
+            }
+            if kind == .lapisOre, case .dropItem(let position, _) = drops.first {
+                #expect(position == SIMD3(8.674418717622757, 1.1567402719520032, 8.393816784024239))
+            }
+        }
+        var random = JavaRandom(seed: 1)
+        let web = BlockDrops.harvest(BlockState(.cobweb), at: p, with: ItemStack(id: 359), random: &random)
+        if case .dropItem(_, let stack) = web.first {
+            #expect(stack.id == 287)
+        } else {
+            Issue.record("Sheared cobweb did not drop string")
+        }
+    }
+
+    @Test func placementRetainsOriginalSlabSnowAndAttachmentQuirks() {
+        var world = world()
+        let p = BlockPosition(8, 1, 8)
+        world.setBlock(BlockState(.slab, metadata: 3), at: p)
+        let adjacent = BlockPosition(7, 2, 8)
+        world[adjacent] = .stone
+        let merged = BlockInteractions.use(
+            hit: hit(adjacent, face: BlockPosition(1, 0, 0)),
+            holding: ItemStack(id: 44, damage: 3), yaw: 0, playerBounds: distantPlayer, world: &world)
+        #expect(merged.consumed == 1 && world[p] == .doubleSlab)
+        #expect(world[BlockPosition(8, 2, 8)] == nil)
+        world[p] = .snowLayer
+        let placedTorch = BlockInteractions.use(
+            hit: hit(p), holding: ItemStack(id: 50), yaw: 0,
+            playerBounds: distantPlayer, world: &world)
+        #expect(placedTorch.consumed == 1 && world.state(at: p) == BlockState(.torch, metadata: 5))
+        world[p] = .snowLayer
+        let flint = BlockInteractions.use(
+            hit: hit(p), holding: ItemStack(id: 259), yaw: 0,
+            playerBounds: distantPlayer, world: &world)
+        #expect(flint.durabilityDamage == 1 && world[p] == .snowLayer)
+        #expect(world[BlockPosition(8, 2, 8)] == .fire)
+        world[p] = nil
+        let leaf = BlockInteractions.use(
+            hit: hit(BlockPosition(8, 0, 8)),
+            holding: ItemStack(id: 18, damage: 2), yaw: 0, playerBounds: distantPlayer, world: &world)
+        #expect(leaf.consumed == 1 && world.state(at: p) == BlockState(.leaves, metadata: 10))
+        world[p] = nil
+        let chest = BlockInteractions.use(
+            hit: hit(BlockPosition(8, 0, 8)), holding: ItemStack(id: 54),
+            yaw: 0, playerBounds: distantPlayer, world: &world)
+        #expect(chest.consumed == 1 && world.state(at: p) == BlockState(.chest))
+        world[BlockPosition(10, 0, 8)] = nil
+        let failedWire = BlockInteractions.use(
+            hit: hit(BlockPosition(10, 0, 8)), holding: ItemStack(id: 331),
+            yaw: 0, playerBounds: distantPlayer, world: &world)
+        #expect(failedWire.handled && failedWire.itemUsed && failedWire.consumed == 0)
+    }
+
+    @Test func removedLogsAndLeavesOnlyMarkTheirOriginalLoadedRadius() {
+        var world = world()
+        let p = BlockPosition(8, 4, 8)
+        let near = p.adding(BlockPosition(1, 0, 0))
+        let far = p.adding(BlockPosition(4, 4, 4))
+        world[near] = .leaves
+        world[far] = .leaves
+        let stone = BlockInteractions.didRemove(BlockState(.stone), at: p, world: &world)
+        #expect(stone.isEmpty && world.state(at: near)?.metadata == 0)
+        let leaf = BlockInteractions.didRemove(BlockState(.leaves), at: p, world: &world)
+        #expect(leaf == [near] && world.state(at: far)?.metadata == 0)
+        let log = BlockInteractions.didRemove(BlockState(.wood), at: p, world: &world)
+        #expect(log == [far] && world.state(at: far)?.metadata == 8)
+        let edge = BlockPosition(31, 4, 8)
+        world[edge.adding(BlockPosition(-1, 0, 0))] = .leaves
+        let unloaded = BlockInteractions.didRemove(BlockState(.wood), at: edge, world: &world)
+        #expect(unloaded.isEmpty)
+    }
+
+    @Test func wireContinuationTracesMatchOriginalRecursiveUpdates() {
+        var updates = BlockPower.WireUpdates()
+        let vectors: [(Int, UInt64, Int, UInt64)] = [
+            (1, 0x72d1_c64b_a2d7_c4ab, 7, 0xf600_b161_7990_f056),
+            (7, 0x72fe_440d_6b9e_a4dd, 22, 0xf705_c4d7_f11d_11be),
+            (6, 0x9cd1_9d32_b3dd_786c, 17, 0x6d76_7bd3_79bc_e95c),
+            (41, 0x5851_24fd_7923_797d, 32, 0xd6c7_af9b_82fe_dd5b),
+        ]
+        func hash(_ rows: [[Int]]) -> UInt64 {
+            var result: UInt64 = 0xcbf2_9ce4_8422_2325
+            for row in rows {
+                for value in row {
+                    let bits = UInt32(truncatingIfNeeded: value)
+                    for shift in stride(from: 0, to: 32, by: 8) {
+                        result = (result ^ UInt64((bits >> shift) & 255)) &* 0x100_0000_01b3
+                    }
+                }
+            }
+            return result
+        }
+        for (scenario, expected) in vectors.enumerated() {
+            var world = world()
+            for x in 8...11 {
+                world.setBlock(
+                    BlockState(.redstoneWire, metadata: scenario == 0 ? 0 : UInt8(23 - x)),
+                    at: BlockPosition(x, 1, 8))
+            }
+            if scenario == 0 { world.setBlock(BlockState(.lever, metadata: 13), at: BlockPosition(7, 1, 8)) }
+            if scenario == 2 { world[BlockPosition(8, 1, 8)] = nil }
+            if scenario == 3 {
+                for x in 9...11 {
+                    world.setBlock(
+                        BlockState(.redstoneWire, metadata: UInt8(22 - x)),
+                        at: BlockPosition(x, 1, 9))
+                }
+            }
+            // The original wire method uses a Java 6 HashSet, retaining its capacity between calls.
+            let result = updates.update(
+                at: BlockPosition(8, 1, 8), world: &world,
+                previousMetadata: scenario == 2 ? 15 : nil)
+            let writes = result.levelChanges.map {
+                [$0.position.x, $0.position.y, $0.position.z, Int($0.level)]
+            }
+            let notifications = result.notifyOrigins.map { [$0.x, $0.y, $0.z] }
+            #expect(writes.count == expected.0 && hash(writes) == expected.1)
+            #expect(notifications.count == expected.2 && hash(notifications) == expected.3)
+            if scenario == 1 {
+                #expect(Array(writes.prefix(3)) == [[8, 1, 8, 13], [9, 1, 8, 12], [8, 1, 8, 0]])
+            }
+            if scenario == 2 { #expect(world[BlockPosition(8, 1, 8)] == nil) }
+        }
+    }
+
+    @Test func aQueuedRepeaterProducesTheOriginalShortInputPulse() {
+        var world = world()
+        let lever = BlockPosition(7, 1, 8)
+        let wire = BlockPosition(8, 1, 8)
+        let repeater = BlockPosition(9, 1, 8)
+        let off = BlockState(.lever, metadata: 5)
+        let on = BlockState(.lever, metadata: 13)
+        world.setBlock(on, at: lever)
+        world[wire] = .redstoneWire
+        world.setBlock(BlockState(.repeaterOff, metadata: 1), at: repeater)
+        var simulation = BlockSimulation(seed: 1)
+        _ = simulation.blockChanged(
+            at: lever, previousState: off, metadataOnly: true,
+            world: &world, time: 0)
+        #expect(world.state(at: wire)?.metadata == 15 && world[repeater] == .repeaterOff)
+        #expect(simulation.scheduledTicks.filter { $0.position == repeater }.map(\.time) == [2])
+        world.setBlock(off, at: lever)
+        _ = simulation.blockChanged(
+            at: lever, previousState: on, metadataOnly: true,
+            world: &world, time: 1)
+        #expect(world.state(at: wire)?.metadata == 0 && world[repeater] == .repeaterOff)
+        #expect(simulation.scheduledTicks.filter { $0.position == repeater }.map(\.time) == [2])
+        _ = simulation.tick(world: &world, players: [], time: 2)
+        #expect(world[repeater] == .repeaterOn)
+        #expect(simulation.scheduledTicks.filter { $0.position == repeater }.map(\.time) == [4])
+        _ = simulation.tick(world: &world, players: [], time: 3)
+        #expect(world[repeater] == .repeaterOn)
+        _ = simulation.tick(world: &world, players: [], time: 4)
+        #expect(world[repeater] == .repeaterOff)
+        #expect(simulation.scheduledTicks.filter { $0.position == repeater }.isEmpty)
+    }
+
 }

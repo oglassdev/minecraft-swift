@@ -53,7 +53,6 @@ public struct PlayerStatistics: Sendable {
     public mutating func recordCraft(_ stack: ItemStack, source: CraftingSource = .crafting)
         -> [AchievementDefinition]
     {
-        guard stack.count > 0 else { return [] }
         var unlocked = record(StatisticRegistry.craft(itemID: stack.id), count: stack.count)
         let achievement: Int?
         switch source {

@@ -21,7 +21,7 @@ extension EntitySimulation {
         {
             entity.health = 0
             entity.lootDropped = true
-            entity.deathTicks = 20
+            entity.deathTicks = 21
             return []
         }
         if entity.kind == "ghast" { return tickGhast(&entity, world: world, player: player) }
@@ -58,44 +58,13 @@ extension EntitySimulation {
         {
             entity.fireTicks = 300
         }
-        let water = FluidPhysics.waterContact(
-            in: world, bounds: entity.bounds.expanded(by: SIMD3(-0.001, -0.401, -0.001)))
-        entity.velocity += water.acceleration
-        if water.touching {
-            entity.fireTicks = 0
-            entity.fallDistance = 0
-        }
-        if entity.fireTicks > 0 {
-            if entity.fireTicks % 20 == 0 && entity.kind != "pigZombie" { entity.health -= 1 }
-            entity.fireTicks -= 1
-        }
-        let eye = entity.eyePosition
-        if world[BlockPosition(Int(floor(eye.x)), Int(floor(eye.y)), Int(floor(eye.z)))] == .water
-            || world[BlockPosition(Int(floor(eye.x)), Int(floor(eye.y)), Int(floor(eye.z)))] == .stillWater
-        {
-            entity.air -= 1
-            if entity.air == -20 {
-                entity.air = 0
-                entity.health -= 2
-            }
-        } else {
-            entity.air = 300
-        }
+        let water = (touching: entity.isInWater, acceleration: SIMD3<Double>.zero)
         guard entity.health > 0 else { return events }
         if entity.kind == "slime" {
             return events
                 + tickSlime(
                     &entity, world: world, player: &player, inventory: &inventory,
                     visible: canSee(entity, target: localPlayer, world: world))
-        }
-        if entity.kind == "chicken" {
-            if !entity.onGround && entity.velocity.y < 0 { entity.velocity.y *= 0.6 }
-            if entity.specialTicks == 0 { entity.specialTicks = 6000 + random.nextInt(bound: 6000) }
-            entity.specialTicks -= 1
-            if entity.specialTicks == 0 {
-                events.append(.dropItem(position: entity.position, stack: ItemStack(id: 344)))
-                events.append(.sound(name: "mob.chickenplop", position: entity.position, volume: 1, pitch: 1))
-            }
         }
         var attacking = entity.kind == "wolf" && (entity.metadata & 1 != 0 || entity.wolfShaking)
         var target = livingTarget(id: entity.targetEntityID, player: player)
@@ -113,7 +82,7 @@ extension EntitySimulation {
                     if entity.fuseTicks >= 30 {
                         entity.health = 0
                         entity.lootDropped = true
-                        entity.deathTicks = 20
+                        entity.deathTicks = 21
                         events.append(
                             explosionEvent(
                                 at: entity.position, power: entity.metadata & 1 == 0 ? 3 : 6, source: .monster
@@ -195,14 +164,26 @@ extension EntitySimulation {
                 &entity, world: world, player: player, attacking: attacking, water: water.touching,
                 inventory: inventory)
         }
-        let blocked = EntityMotion.living(
-            &entity, world: world, forward: movement.forward, strafe: movement.strafe, jump: movement.jump)
+        _ = EntityMotion.living(
+            &entity, world: world, forward: movement.forward, strafe: movement.strafe, jump: movement.jump,
+            collisions: collisionView())
         if entity.kind == "wolf" { events += wolfEffects(&entity, world: world, water: water.touching) }
-        if entity.kind == "spider", blocked && !entity.onGround { entity.velocity.y = 0.2 }
+        if entity.kind == "chicken" {
+            entity.updateChickenWings()
+            entity.specialTicks -= 1
+            if entity.specialTicks <= 0 {
+                events.append(
+                    .sound(
+                        name: "mob.chickenplop", position: entity.position, volume: 1,
+                        pitch: (random.nextFloat() - random.nextFloat()) * 0.2 + 1))
+                events.append(.dropItem(position: entity.position, stack: ItemStack(id: 344)))
+                entity.specialTicks = random.nextInt(bound: 6000) + 6000
+            }
+        }
         return events
     }
 
-    private mutating func tickGhast(_ entity: inout GameEntity, world: BlockWorld, player: Player)
+    mutating func tickGhast(_ entity: inout GameEntity, world: BlockWorld, player: Player)
         -> [BlockEvent]
     {
         var events: [BlockEvent] = []
@@ -299,12 +280,13 @@ extension EntitySimulation {
                 Int(floor(entity.position.z)))
             friction = (world[cell] == .ice ? Float(0.98) : Float(0.6)) * 0.91
         }
-        _ = EntityMotion.move(&entity, world: world)
+        _ = EntityMotion.move(&entity, world: world, collisions: collisionView())
         entity.velocity *= water ? Double(Float(0.8)) : (lava ? 0.5 : Double(friction))
+        entity.updateLimbSwing()
         return events
     }
 
-    private mutating func tickSquid(_ entity: inout GameEntity, world: BlockWorld) -> [BlockEvent] {
+    mutating func tickSquid(_ entity: inout GameEntity, world: BlockWorld) -> [BlockEvent] {
         let baseContact = FluidPhysics.waterContact(
             in: world, bounds: entity.bounds.expanded(by: SIMD3(-0.001, -Double(Float(0.4)) - 0.001, -0.001)))
         entity.velocity += baseContact.acceleration
@@ -318,7 +300,7 @@ extension EntitySimulation {
             FluidPhysics.waterContact(
                 in: world, bounds: entity.bounds.expanded(by: SIMD3(0, -Double(Float(0.6)), 0))
             ).acceleration
-        _ = EntityMotion.move(&entity, world: world)
+        _ = EntityMotion.move(&entity, world: world, collisions: collisionView())
         entity.squidPhase += entity.squidPhaseVelocity
         if entity.squidPhase > Float(Double.pi * 2) {
             entity.squidPhase -= Float(Double.pi * 2)

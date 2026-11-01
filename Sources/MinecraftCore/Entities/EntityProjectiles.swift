@@ -23,26 +23,46 @@ extension EntitySimulation {
     @discardableResult
     public mutating func shoot(
         kind: String, origin: SIMD3<Double>, direction: SIMD3<Double>, speed: Float = 1.5,
-        inaccuracy: Float = 1, ownerID: Int64? = 0
+        inaccuracy: Float = 1, ownerID: Int64? = 0, randomSeed: Int64? = nil
     ) -> Int64 {
+        let id = spawn(kind: kind, position: origin)
+        if let randomSeed { setEntityRandomSeed(randomSeed, for: id) }
+        let callerRandom = random
+        random = entityRandom(for: id)
+        defer {
+            entityRandoms[id] = random
+            random = callerRandom
+        }
         if GameEntity.canonicalKind(kind) == "fireball" {
             let aim =
                 direction + SIMD3(random.nextGaussian(), random.nextGaussian(), random.nextGaussian()) * 0.4
             let length = Double(Float(sqrt(EntityMotion.squaredLength(aim))))
-            let id = spawn(kind: kind, position: origin)
             update(id: id) {
                 $0.projectileOwner = ownerID
                 $0.acceleration = length > 0 ? aim / length * 0.1 : .zero
             }
             return id
         }
+        if kind == "arrow", let ownerID, entities.first(where: { $0.id == ownerID })?.kind == "skeleton" {
+            _ = random.nextGaussian()
+            _ = random.nextGaussian()
+            _ = random.nextGaussian()
+        }
         let length = Double(Float(sqrt(EntityMotion.squaredLength(direction))))
         var direction = length > 0 ? direction / length : .zero
         direction +=
             SIMD3(random.nextGaussian(), random.nextGaussian(), random.nextGaussian()) * Double(Float(0.0075))
             * Double(inaccuracy)
-        let id = spawn(kind: kind, position: origin, velocity: direction * Double(speed))
-        entities[entities.count - 1].projectileOwner = ownerID
+        let velocity = direction * Double(speed)
+        update(id: id) {
+            $0.projectileOwner = ownerID
+            $0.velocity = velocity
+            $0.yaw = Float(atan2(velocity.x, -velocity.z))
+            $0.pitch = Float(
+                atan2(velocity.y, Double(Float(sqrt(velocity.x * velocity.x + velocity.z * velocity.z)))))
+            $0.previousYaw = $0.yaw
+            $0.previousPitch = $0.pitch
+        }
         return id
     }
 
@@ -50,6 +70,7 @@ extension EntitySimulation {
         _ entity: inout GameEntity, world: BlockWorld, player: inout Player, inventory: inout PlayerInventory
     ) -> [BlockEvent] {
         var events: [BlockEvent] = []
+        if entity.kind == "fireball" { entity.fireTicks = 10 }
         if entity.inGround {
             if let block = entity.stuckBlock, world.state(at: block) != entity.stuckState {
                 entity.inGround = false
@@ -61,7 +82,8 @@ extension EntitySimulation {
             } else {
                 entity.ticksInGround += 1
                 if entity.ticksInGround >= 1200 { entity.health = 0 }
-                if entity.kind == "arrow", entity.projectileOwner == 0, entity.pickupDelay == 0,
+                if player.health > 0, entity.kind == "arrow", entity.projectileOwner == 0,
+                    entity.pickupDelay == 0,
                     entity.bounds.intersects(player.bounds.expanded(by: SIMD3(1, 0, 1))),
                     inventory.insert(ItemStack(id: 262)) == nil
                 {
@@ -125,6 +147,7 @@ extension EntitySimulation {
             }
             if entity.kind == "arrow", let block {
                 let hitMovement = block.point - entity.position
+                updateProjectileAngles(&entity, velocity: hitMovement)
                 entity.position = block.point - direction * Double(Float(0.05))
                 entity.velocity = SIMD3(
                     Double(Float(hitMovement.x)), Double(Float(hitMovement.y)), Double(Float(hitMovement.z)))
@@ -153,9 +176,7 @@ extension EntitySimulation {
             return events
         }
         entity.position += entity.velocity
-        let horizontal = sqrt(entity.velocity.x * entity.velocity.x + entity.velocity.z * entity.velocity.z)
-        entity.yaw = Float(atan2(entity.velocity.x, -entity.velocity.z))
-        entity.pitch = Float(atan2(entity.velocity.y, horizontal))
+        updateProjectileAngles(&entity, velocity: entity.velocity)
         let water = EntityMotion.isFluid(in: world, bounds: entity.bounds, water: true)
         if entity.kind == "fireball" {
             entity.velocity =
@@ -166,5 +187,17 @@ extension EntitySimulation {
             entity.velocity.y -= Double(Float(0.03))
         }
         return events
+    }
+
+    private func updateProjectileAngles(_ entity: inout GameEntity, velocity: SIMD3<Double>) {
+        let horizontal = Double(Float(sqrt(velocity.x * velocity.x + velocity.z * velocity.z)))
+        let yaw = Float(atan2(velocity.x, -velocity.z))
+        let pitch = Float(atan2(velocity.y, horizontal))
+        while yaw - entity.previousYaw < -BetaMath.pi { entity.previousYaw -= 2 * BetaMath.pi }
+        while yaw - entity.previousYaw >= BetaMath.pi { entity.previousYaw += 2 * BetaMath.pi }
+        while pitch - entity.previousPitch < -BetaMath.pi { entity.previousPitch -= 2 * BetaMath.pi }
+        while pitch - entity.previousPitch >= BetaMath.pi { entity.previousPitch += 2 * BetaMath.pi }
+        entity.yaw = entity.previousYaw + (yaw - entity.previousYaw) * 0.2
+        entity.pitch = entity.previousPitch + (pitch - entity.previousPitch) * 0.2
     }
 }

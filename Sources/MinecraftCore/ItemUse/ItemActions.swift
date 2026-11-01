@@ -17,10 +17,31 @@ public struct ItemActions: Sendable {
 
     public init(seed: Int64) { random = JavaRandom(seed: seed) }
 
+    public mutating func interactWithBlock(
+        hit: BlockHit, holding: ItemStack?, yaw: Float, playerBounds: AxisAlignedBox,
+        world: inout BlockWorld, health: Int = 20, placementBlockers: [AxisAlignedBox] = [],
+        random worldRandom: inout JavaRandom
+    ) -> BlockUseResult {
+        BlockInteractions.use(
+            hit: hit, holding: holding, yaw: yaw, playerBounds: playerBounds,
+            world: &world, health: health, placementBlockers: placementBlockers, random: &worldRandom,
+            itemRandom: &random)
+    }
+
     /// Call after block activation and item-on-block use have declined the action.
     public mutating func useInAir(
         world: inout BlockWorld, player: inout Player, inventory: inout PlayerInventory,
         entities: inout EntitySimulation, yaw: Float, pitch: Float
+    ) -> ItemActionResult {
+        var worldRandom = JavaRandom(seed: world.seed ^ Int64(truncatingIfNeeded: world.revision))
+        return useInAir(
+            world: &world, player: &player, inventory: &inventory, entities: &entities,
+            yaw: yaw, pitch: pitch, random: &worldRandom)
+    }
+
+    public mutating func useInAir(
+        world: inout BlockWorld, player: inout Player, inventory: inout PlayerInventory,
+        entities: inout EntitySimulation, yaw: Float, pitch: Float, random worldRandom: inout JavaRandom
     ) -> ItemActionResult {
         guard let held = inventory.selectedStack, held.count > 0 else { return ItemActionResult() }
         switch held.id {
@@ -89,9 +110,8 @@ public struct ItemActions: Sendable {
             else {
                 return ItemActionResult()
             }
-            let result = BlockInteractions.use(
-                hit: hit, holding: held, yaw: yaw, playerBounds: player.bounds,
-                world: &world, health: player.health)
+            let result = BlockInteractions.useBucket(
+                hit: hit, holding: held, world: &world, eye: origin, random: &worldRandom)
             return apply(result, player: &player, inventory: &inventory)
         case 335:
             guard

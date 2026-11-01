@@ -13,6 +13,8 @@ extension GameSession {
             return
         }
         if !miningPressed {
+            player.swing()
+            lastPrimaryTick = tickCount
             state.client?.send(.animation(entityID: state.localEntityID, animation: 1))
             if let entity = entitySimulation.target(
                 origin: player.eyePositionDouble, direction: SIMD3<Double>(camera.forward), reach: 4,
@@ -119,13 +121,13 @@ extension GameSession {
     }
 
     func beginChat() {
-        guard isMultiplayer, !isLoading, !inventoryOpen, !signEditorOpen else { return }
+        guard !isLoading, !inventoryOpen, !signEditorOpen, !showDeathScreen else { return }
         chatOpen = true
         resetInput()
     }
 
     func sendChat(_ message: String) {
-        let text = limitedJavaString(message.trimmingCharacters(in: .whitespacesAndNewlines), limit: 119)
+        let text = limitedJavaString(message.trimmingCharacters(in: .whitespacesAndNewlines), limit: 100)
         if !text.isEmpty { multiplayer?.client?.send(.chat(text)) }
         chatOpen = false
         resetInput()
@@ -156,6 +158,7 @@ extension GameSession {
     }
 
     func dismissOverlay() {
+        guard !showDeathScreen else { return }
         if signEditorOpen {
             finishSignEditing()
         } else if chatOpen {

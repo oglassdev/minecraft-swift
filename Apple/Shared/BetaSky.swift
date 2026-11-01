@@ -10,29 +10,53 @@ struct BetaSkyState {
     let cloudColor: SIMD3<Float>
     let starBrightness: Float
     let skySubtraction: Float
-    let sunDirection: SIMD3<Float>
+    let celestialOpacity: Float
+    let sunriseColor: SIMD4<Float>?
+    private let rain: Float
+    private let thunder: Float
 
-    init(time: Int64, temperature: Double, rain: Float = 0, thunder: Float = 0) {
-        var angle = Float((time % 24000 + 24000) % 24000) / 24000 - 0.25
+    init(
+        time: Int64, temperature: Double, rain: Float = 0, thunder: Float = 0, partialTick: Float = 0,
+        lightningFlash: Int = 0
+    ) {
+        var angle = (Float(time % 24000) + partialTick) / 24000 - 0.25
         if angle < 0 { angle += 1 }
+        if angle > 1 { angle -= 1 }
         let originalAngle = angle
         angle = 1 - Float((cos(Double(angle) * .pi) + 1) / 2)
         celestialAngle = originalAngle + (angle - originalAngle) / 3
-        let phase = celestialAngle * .pi * 2
+        let phase = celestialAngle * BetaVisualMath.pi * 2
         let daylight = min(1, max(0, Self.cosine(phase) * 2 + 0.5))
-        let biomeTemperature = Float(min(1, max(-1, temperature / 3)))
+        let biomeTemperature = min(1, max(-1, Float(temperature) / 3))
         let rain = min(1, max(0, rain))
         let thunder = min(1, max(0, thunder))
+        self.rain = rain
+        self.thunder = thunder
+        celestialOpacity = 1 - rain
         let baseSky =
             Self.hsv(
                 hue: 0.62222224 - biomeTemperature * 0.05,
                 saturation: 0.5 + biomeTemperature * 0.1) * daylight
-        skyColor = Self.weatherColor(
+        var skyColor = Self.weatherColor(
             Self.weatherColor(baseSky, strength: rain * 0.75, gray: 0.6), strength: thunder * 0.75, gray: 0.2)
+        if lightningFlash > 0 {
+            let strength = min(1, Float(lightningFlash) - partialTick) * 0.45
+            skyColor = skyColor * (1 - strength) + SIMD3(0.8, 0.8, 1) * strength
+        }
+        self.skyColor = skyColor
+        let cosine = Self.cosine(phase)
+        if cosine >= -0.4 && cosine <= 0.4 {
+            let fraction = cosine / 0.4 * 0.5 + 0.5
+            var opacity = 1 - (1 - BetaVisualMath.sine(fraction * BetaVisualMath.pi)) * 0.99
+            opacity *= opacity
+            sunriseColor = SIMD4(fraction * 0.3 + 0.7, fraction * fraction * 0.7 + 0.2, 0.2, opacity)
+        } else {
+            sunriseColor = nil
+        }
         let baseFog =
             SIMD3<Float>(0.7529412, 0.84705883, 1)
             * SIMD3(daylight * 0.94 + 0.06, daylight * 0.94 + 0.06, daylight * 0.91 + 0.09)
-        fogColor = baseFog * SIMD3(1 - rain * 0.5, 1 - rain * 0.5, 1 - rain * 0.4) * (1 - thunder * 0.5)
+        fogColor = baseFog
         let rainyClouds =
             Self.weatherColor(SIMD3(repeating: 1), strength: rain * 0.95, gray: 0.6)
             * SIMD3(daylight * 0.9 + 0.1, daylight * 0.9 + 0.1, daylight * 0.85 + 0.15)
@@ -42,7 +66,14 @@ struct BetaSkyState {
         let rainyLight = Float(Double(daylight) * (1 - Double(rain * 5) / 16))
         let stormLight = Float(Double(rainyLight) * (1 - Double(thunder * 5) / 16))
         skySubtraction = Float(Int((1 - stormLight) * 11))
-        sunDirection = SIMD3(-sin(phase), cos(phase), 0)
+    }
+
+    func renderFogColor(distanceOption: Int, brightness: Float) -> SIMD3<Float> {
+        let weight = 1 - Float(pow(Double(1 / Float(4 - min(3, max(0, distanceOption)))), 0.25))
+        var color = fogColor + (skyColor - fogColor) * weight
+        color *= SIMD3(1 - rain * 0.5, 1 - rain * 0.5, 1 - rain * 0.4)
+        color *= 1 - thunder * 0.5
+        return color * brightness
     }
 
     private static func cosine(_ value: Float) -> Float {
@@ -52,7 +83,8 @@ struct BetaSkyState {
 
     private static func weatherColor(_ color: SIMD3<Float>, strength: Float, gray: Float) -> SIMD3<Float> {
         let luminance = (color.x * 0.3 + color.y * 0.59 + color.z * 0.11) * gray
-        return color * (1 - strength) + SIMD3(repeating: luminance * strength)
+        let retained = 1 - strength
+        return color * retained + SIMD3(repeating: luminance * (1 - retained))
     }
 
     private static func hsv(hue: Float, saturation: Float) -> SIMD3<Float> {
@@ -78,119 +110,195 @@ struct BetaSkyState {
 
 @MainActor
 final class SkyRenderer {
-    private let skyPipeline: MTLRenderPipelineState
-    private let starPipeline: MTLRenderPipelineState
+    private let device: MTLDevice
+    private let solidPipeline: MTLRenderPipelineState
+    private let alphaPipeline: MTLRenderPipelineState
+    private let additivePipeline: MTLRenderPipelineState
     private let cloudPipeline: MTLRenderPipelineState
-    private let depthState: MTLDepthStencilState
-    private let sun: MTLTexture
-    private let moon: MTLTexture
-    private let clouds: MTLTexture
-    private let stars: MTLBuffer?
-    private let starVertexCount: Int
+    private let cloudDepthPipeline: MTLRenderPipelineState
+    private let skyDepth: MTLDepthStencilState
+    private let cloudDepth: MTLDepthStencilState
+    private var sun: MTLTexture
+    private var moon: MTLTexture
+    private var clouds: MTLTexture
+    private let upper: Geometry
+    private let lower: Geometry
+    private let stars: Geometry
+    private let sunQuad: Geometry
+    private let moonQuad: Geometry
+    private let fastClouds: Geometry
+    private let fancyClouds: [Geometry]
 
-    struct Uniforms {
-        var viewProjection: simd_float4x4
-        var right: SIMD3<Float>
-        var up: SIMD3<Float>
-        var forward: SIMD3<Float>
-        var sunDirection: SIMD3<Float>
-        var skyColor: SIMD3<Float>
-        var fogColor: SIMD3<Float>
-        var cloudColor: SIMD3<Float>
-        var cameraPosition: SIMD3<Float>
-        var parameters: SIMD4<Float>
+    private struct Geometry {
+        let buffer: MTLBuffer?
+        let count: Int
+    }
+
+    struct Appearance {
+        var tint = SIMD4<Float>(repeating: 1)
+        var uvOffset = SIMD2<Float>.zero
+        var fogScale = SIMD3<Float>(repeating: 1)
     }
 
     init(device: MTLDevice, library: MTLLibrary, colorFormat: MTLPixelFormat) throws {
+        self.device = device
         let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "skyGeometryVertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "skyGeometryFragment")
         descriptor.colorAttachments[0].pixelFormat = colorFormat
         descriptor.depthAttachmentPixelFormat = .depth32Float
-        descriptor.vertexFunction = library.makeFunction(name: "skyVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "skyFragment")
-        skyPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        descriptor.colorAttachments[0].isBlendingEnabled = true
-        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
-        descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-        descriptor.fragmentFunction = library.makeFunction(name: "cloudFragment")
+        solidPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        let attachment = descriptor.colorAttachments[0]!
+        attachment.isBlendingEnabled = true
+        attachment.sourceRGBBlendFactor = .sourceAlpha
+        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        attachment.sourceAlphaBlendFactor = .one
+        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        alphaPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        attachment.destinationRGBBlendFactor = .one
+        additivePipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        descriptor.fragmentFunction = library.makeFunction(name: "cloudGeometryFragment")
         cloudPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        descriptor.vertexFunction = library.makeFunction(name: "starVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "starFragment")
-        descriptor.colorAttachments[0].destinationRGBBlendFactor = .one
-        starPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        attachment.writeMask = []
+        cloudDepthPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
         let depth = MTLDepthStencilDescriptor()
         depth.depthCompareFunction = .always
         depth.isDepthWriteEnabled = false
-        guard let state = device.makeDepthStencilState(descriptor: depth) else {
+        guard let skyDepth = device.makeDepthStencilState(descriptor: depth) else {
             throw Renderer.SetupError.unavailable("could not create sky depth state")
         }
-        depthState = state
+        self.skyDepth = skyDepth
+        depth.depthCompareFunction = .lessEqual
+        depth.isDepthWriteEnabled = true
+        guard let cloudDepth = device.makeDepthStencilState(descriptor: depth) else {
+            throw Renderer.SetupError.unavailable("could not create cloud depth state")
+        }
+        self.cloudDepth = cloudDepth
+        func geometry(_ vertices: [BlockVertex]) -> Geometry {
+            Geometry(buffer: device.makeSharedBuffer(vertices), count: vertices.count)
+        }
+        upper = geometry(BetaSkyGeometry.plane(height: 16))
+        lower = geometry(BetaSkyGeometry.plane(height: -16))
+        stars = geometry(
+            Self.starVertices().map {
+                BlockVertex(
+                    position: SIMD3($0.x, $0.y, $0.z), color: SIMD3(repeating: 1), textureWeight: 0,
+                    light: 255)
+            })
+        sunQuad = geometry(BetaSkyGeometry.celestial(moon: false))
+        moonQuad = geometry(BetaSkyGeometry.celestial(moon: true))
+        fastClouds = geometry(BetaSkyGeometry.fastClouds())
+        fancyClouds = (0..<4).map {
+            geometry(BetaSkyGeometry.fancyClouds(bottom: $0 & 1 != 0, top: $0 & 2 != 0))
+        }
         let loader = MTKTextureLoader(device: device)
-        func load(_ path: String) throws -> MTLTexture {
-            guard let root = Bundle.main.resourceURL else {
-                throw Renderer.SetupError.unavailable("missing resources")
-            }
-            return try loader.newTexture(
-                URL: root.appendingPathComponent("Vanilla/\(path).png"),
-                options: [
-                    .origin: MTKTextureLoader.Origin.topLeft, .SRGB: false,
-                ])
+        sun = try Self.load("terrain/sun", loader: loader)
+        moon = try Self.load("terrain/moon", loader: loader)
+        clouds = try Self.load("environment/clouds", loader: loader)
+    }
+
+    private static func load(_ path: String, loader: MTKTextureLoader) throws -> MTLTexture {
+        guard let url = TextureResources.url(for: path) else {
+            throw Renderer.SetupError.unavailable("missing sky texture")
         }
-        sun = try load("terrain/sun")
-        moon = try load("terrain/moon")
-        clouds = try load("environment/clouds")
-        let vertices = Self.starVertices()
-        starVertexCount = vertices.count
-        stars = vertices.withUnsafeBytes { bytes in
-            guard let address = bytes.baseAddress else { return nil }
-            return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-        }
+        return try loader.newTexture(
+            URL: url, options: [.origin: MTKTextureLoader.Origin.topLeft, .SRGB: false])
+    }
+
+    func reload(device: MTLDevice) throws {
+        let loader = MTKTextureLoader(device: device)
+        let sun = try Self.load("terrain/sun", loader: loader)
+        let moon = try Self.load("terrain/moon", loader: loader)
+        let clouds = try Self.load("environment/clouds", loader: loader)
+        self.sun = sun
+        self.moon = moon
+        self.clouds = clouds
     }
 
     func draw(
-        encoder: MTLRenderCommandEncoder, camera: Camera, aspect: Float,
-        matrix: simd_float4x4, state: BetaSkyState, time: Int64, fogColor: SIMD3<Float>,
-        origin: SIMD3<Double> = .zero, visible: Bool
+        encoder: MTLRenderCommandEncoder, center: SIMD3<Float>, matrix: simd_float4x4,
+        state: BetaSkyState, fogColor: SIMD3<Float>, fogEnd: Float, visible: Bool
     ) {
-        let right = simd_normalize(simd_cross(camera.forward, SIMD3(0, 1, 0)))
-        let up = simd_cross(right, camera.forward)
-        var translation = matrix_identity_float4x4
-        translation.columns.3 = SIMD4(camera.position, 1)
-        let phase = state.celestialAngle * .pi * 2
-        let rotation = simd_float4x4(
-            columns: (
-                SIMD4<Float>(0, 0, 1, 0), SIMD4(-sin(phase), cos(phase), 0, 0),
-                SIMD4(-cos(phase), -sin(phase), 0, 0), SIMD4(0, 0, 0, 1)
-            ))
-        var uniforms = Uniforms(
-            viewProjection: matrix * translation * rotation, right: right, up: up,
-            forward: camera.forward, sunDirection: state.sunDirection, skyColor: state.skyColor,
-            fogColor: fogColor, cloudColor: state.cloudColor,
-            cameraPosition: SIMD3(
-                Float((origin.x + Double(camera.position.x)).truncatingRemainder(dividingBy: 2048)),
-                camera.position.y,
-                Float((origin.z + Double(camera.position.z)).truncatingRemainder(dividingBy: 2048))),
-            parameters: SIMD4(
-                aspect, tan(70 * .pi / 360),
-                Float((Double(time) * 0.03).truncatingRemainder(dividingBy: 2048)),
-                visible ? state.starBrightness : -1))
-        encoder.setDepthStencilState(depthState)
+        guard visible else { return }
+        let centered = matrix * HeldItemGeometry.translation(center)
+        var uniforms = Renderer.Uniforms(
+            viewProjection: centered, renderOffset: .zero, cameraPosition: .zero,
+            fogColor: fogColor, fogStart: 0, fogEnd: fogEnd * 0.8, skySubtraction: 0, fogDensity: 0,
+            ambientFloor: 0.05)
+        var appearance = Appearance(tint: SIMD4(state.skyColor, 1))
+        encoder.setDepthStencilState(skyDepth)
         encoder.setCullMode(.none)
-        encoder.setRenderPipelineState(skyPipeline)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
-        encoder.setFragmentTexture(sun, index: 0)
-        encoder.setFragmentTexture(moon, index: 1)
-        encoder.setFragmentTexture(clouds, index: 2)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        if let stars, state.starBrightness > 0, visible {
-            encoder.setRenderPipelineState(starPipeline)
-            encoder.setVertexBuffer(stars, offset: 0, index: 0)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: starVertexCount)
+        encoder.setRenderPipelineState(solidPipeline)
+        draw(upper, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: sun)
+        uniforms.fogStart = 10000
+        uniforms.fogEnd = 20000
+        if let color = state.sunriseColor {
+            encoder.setRenderPipelineState(alphaPipeline)
+            uniforms.viewProjection =
+                centered * HeldItemGeometry.rotation(90, axis: SIMD3(1, 0, 0))
+                * HeldItemGeometry.rotation(state.celestialAngle > 0.5 ? 180 : 0, axis: SIMD3(0, 0, 1))
+            appearance.tint = color
+            let vertices = BetaSkyGeometry.sunrise(opacity: color.w)
+            let geometry = Geometry(buffer: device.makeSharedBuffer(vertices), count: vertices.count)
+            draw(geometry, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: sun)
         }
-        encoder.setRenderPipelineState(cloudPipeline)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.setRenderPipelineState(additivePipeline)
+        uniforms.viewProjection =
+            centered * HeldItemGeometry.rotation(state.celestialAngle * 360, axis: SIMD3(1, 0, 0))
+        appearance.tint = SIMD4(1, 1, 1, state.celestialOpacity)
+        draw(sunQuad, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: sun)
+        draw(moonQuad, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: moon)
+        if state.starBrightness > 0 {
+            appearance.tint = SIMD4(repeating: state.starBrightness)
+            draw(stars, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: sun)
+        }
+        encoder.setRenderPipelineState(solidPipeline)
+        uniforms.viewProjection = centered
+        uniforms.fogStart = 0
+        uniforms.fogEnd = fogEnd * 0.8
+        appearance.tint = SIMD4(state.skyColor * SIMD3(0.2, 0.2, 0.6) + SIMD3(0.04, 0.04, 0.1), 1)
+        draw(lower, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: sun)
     }
 
+    func drawClouds(
+        encoder: MTLRenderCommandEncoder, center: SIMD3<Float>, position: SIMD3<Double>,
+        matrix: simd_float4x4, state: BetaSkyState, ticks: Int, partial: Float,
+        worldUniforms: Renderer.Uniforms, fancy: Bool, visible: Bool
+    ) {
+        guard visible else { return }
+        let placement = BetaSkyGeometry.cloudPlacement(
+            position: position, ticks: ticks, partial: partial, fancy: fancy)
+        var uniforms = worldUniforms
+        uniforms.viewProjection =
+            matrix * HeldItemGeometry.translation(center)
+            * simd_float4x4(diagonal: SIMD4(placement.scale, 1))
+        uniforms.renderOffset = placement.offset
+        uniforms.cameraPosition = .zero
+        var appearance = Appearance(
+            tint: SIMD4(state.cloudColor, 0.8), uvOffset: placement.uv, fogScale: placement.scale)
+        encoder.setCullMode(.none)
+        encoder.setDepthStencilState(cloudDepth)
+        let geometry = fancy ? fancyClouds[(placement.bottom ? 1 : 0) | (placement.top ? 2 : 0)] : fastClouds
+        if fancy {
+            encoder.setRenderPipelineState(cloudDepthPipeline)
+            draw(geometry, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: clouds)
+        }
+        encoder.setRenderPipelineState(cloudPipeline)
+        draw(geometry, encoder: encoder, uniforms: &uniforms, appearance: &appearance, texture: clouds)
+    }
+
+    private func draw(
+        _ geometry: Geometry, encoder: MTLRenderCommandEncoder,
+        uniforms: inout Renderer.Uniforms, appearance: inout Appearance, texture: MTLTexture
+    ) {
+        guard let buffer = geometry.buffer else { return }
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Renderer.Uniforms>.stride, index: 1)
+        encoder.setVertexBytes(&appearance, length: MemoryLayout<Appearance>.stride, index: 2)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: geometry.count)
+    }
     static func starVertices() -> [SIMD4<Float>] {
         var random = JavaRandom(seed: 10842)
         var vertices: [SIMD4<Float>] = []

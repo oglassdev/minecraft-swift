@@ -5,34 +5,55 @@ import simd
 @MainActor
 final class EntityRenderer {
     private let device: MTLDevice
-    private let loader: MTKTextureLoader
-    private let atlas: MTLTexture
-    private let items: MTLTexture
-    private var textures: [String: MTLTexture] = [:]
-    private var animations: [Int64: Animation] = [:]
-    private var blockModels: [UInt16: [BlockVertex]] = [:]
-    private var pistons: [BlockPosition: (progress: Float, time: CFTimeInterval)] = [:]
+    private var atlas: MTLTexture
+    private var items: MTLTexture
+    private let textures: NamedTextures
+    private var blockModels: [UInt32: [BlockVertex]] = [:]
     private let signs = SignGeometry()
-
-    private struct Animation {
-        var lastAge: Int
-        var lastTickTime: CFTimeInterval
-        var phase: Float = 0
-        var amplitude: Float = 0
-    }
 
     private struct Batch {
         let texture: String
         var vertices: [BlockVertex]
         var blended = false
         var additive = false
+        var cull: MTLCullMode = .none
+    }
+
+    /// Batches share one vertex array so a frame needs a single GPU buffer.
+    private struct BatchList {
+        struct Draw {
+            let texture: String
+            let range: Range<Int>
+            let blended: Bool
+            let additive: Bool
+            let cull: MTLCullMode
+        }
+
+        var vertices: [BlockVertex] = []
+        var draws: [Draw] = []
+
+        mutating func append(_ batch: Batch) {
+            guard !batch.vertices.isEmpty else { return }
+            draws.append(
+                Draw(
+                    texture: batch.texture,
+                    range: vertices.count..<vertices.count + batch.vertices.count,
+                    blended: batch.blended, additive: batch.additive, cull: batch.cull))
+            vertices += batch.vertices
+        }
     }
 
     init(device: MTLDevice, atlas: MTLTexture, items: MTLTexture) {
         self.device = device
         self.atlas = atlas
         self.items = items
-        loader = MTKTextureLoader(device: device)
+        textures = NamedTextures(device: device)
+    }
+
+    func reload(atlas: MTLTexture, items: MTLTexture) {
+        self.atlas = atlas
+        self.items = items
+        textures.removeAll()
     }
 
     func draw(
@@ -41,11 +62,11 @@ final class EntityRenderer {
         transparentPipeline: MTLRenderPipelineState, additivePipeline: MTLRenderPipelineState,
         writeDepth: MTLDepthStencilState,
         readDepth: MTLDepthStencilState, frustum: RenderFrustum? = nil,
-        visibleChunks: Set<ChunkPosition>? = nil, renderDistance: Float = 128
+        visibleChunks: Set<ChunkPosition>? = nil, renderDistance: Float = 128, skySubtraction: Float = 0,
+        partialTick: Float = 1
     ) {
-        let activeIDs = Set(entities.map(\.id))
-        animations = animations.filter { activeIDs.contains($0.key) }
-        var batches: [Batch] = []
+        let partial = min(1, max(0, partialTick))
+        var batches = BatchList()
         for entity in entities {
             let relative =
                 entity.position
@@ -63,29 +84,48 @@ final class EntityRenderer {
             {
                 continue
             }
-            var animation = animations[entity.id] ?? Animation(lastAge: entity.ageTicks, lastTickTime: now)
-            if animation.lastAge != entity.ageTicks {
-                let dx = entity.position.x - entity.previousPosition.x
-                let dz = entity.position.z - entity.previousPosition.z
-                let speed = min(1, Float(sqrt(dx * dx + dz * dz)) * 4)
-                animation.amplitude += (speed - animation.amplitude) * 0.4
-                animation.phase += animation.amplitude
-                animation.lastAge = entity.ageTicks
-                animation.lastTickTime = now
-            }
-            animations[entity.id] = animation
-            let partial = Float(min(1, max(0, (now - animation.lastTickTime) * 20)))
             let interpolated =
                 entity.previousPosition + (entity.position - entity.previousPosition) * Double(partial)
             let local = interpolated - origin
-            let position = SIMD3(Float(local.x), Float(local.y), Float(local.z))
+            var position = SIMD3(Float(local.x), Float(local.y), Float(local.z))
+            var pose = entity
+            pose.pitch = entity.previousPitch + (entity.pitch - entity.previousPitch) * partial
+            var yawDelta = (entity.yaw - entity.previousYaw).remainder(dividingBy: BetaVisualMath.pi * 2)
+            if yawDelta < -BetaVisualMath.pi { yawDelta += BetaVisualMath.pi * 2 }
+            if yawDelta >= BetaVisualMath.pi { yawDelta -= BetaVisualMath.pi * 2 }
+            let viewYaw = entity.previousYaw + yawDelta * partial
+            let bodyYaw =
+                entity.previousBodyYawDegrees + (entity.bodyYawDegrees - entity.previousBodyYawDegrees)
+                * partial
+            var renderYaw =
+                entity.isLiving && entity.kind != "squid"
+                ? bodyYaw * BetaVisualMath.pi / 180 - BetaVisualMath.pi : viewYaw
+            let headYaw =
+                (viewYaw * 180 / BetaVisualMath.pi + 180 - bodyYaw).remainder(dividingBy: 360)
+                * BetaVisualMath.pi / 180
+            if entity.kind == "minecart" {
+                let center = interpolated + SIMD3(0, entity.height / 2, 0)
+                if let rail = EntitySimulation.railPoint(center, world: world) {
+                    let before = EntitySimulation.railOffsetPoint(center, offset: 0.3, world: world) ?? rail
+                    let after = EntitySimulation.railOffsetPoint(center, offset: -0.3, world: world) ?? rail
+                    let adjustment = SIMD3(
+                        rail.x - center.x, (before.y + after.y) / 2 - center.y, rail.z - center.z)
+                    position += SIMD3<Float>(adjustment)
+                    let direction = after - before
+                    if simd_length_squared(direction) > 0 {
+                        let normalized = simd_normalize(direction)
+                        let sourceYaw = Float(atan2(normalized.z, normalized.x) * 180 / Double.pi)
+                        renderYaw = sourceYaw * BetaVisualMath.pi / 180 - BetaVisualMath.pi
+                        pose.pitch = -Float(atan(normalized.y) * 73) * BetaVisualMath.pi / 180
+                    }
+                }
+            }
             let sample = world.light(
                 at: BlockPosition(
                     Int(floor(entity.position.x)),
-                    Int(floor(entity.position.y + entity.height * 0.85)), Int(floor(entity.position.z))))
-            let light = sample.sky << 4 | max(sample.block, entity.fireTicks > 0 ? 15 : 0)
+                    Int(floor(entity.position.y + entity.height * 0.66)), Int(floor(entity.position.z))))
+            let light = sample.sky << 4 | sample.block
             let age = Float(entity.ageTicks) + partial
-            let damageTint: SIMD3<Float> = entity.hurtTicks > 0 ? SIMD3(1, 0.5, 0.5) : SIMD3(repeating: 1)
             switch entity.kind {
             case "painting":
                 batches.append(
@@ -107,7 +147,7 @@ final class EntityRenderer {
                         SIMD3(Float(local.x), Float(local.y + owner.height * 0.75), Float(local.z))
                         + SIMD3(cos(owner.yaw), 0, sin(owner.yaw)) * 0.35
                 } else {
-                    let right = simd_normalize(simd_cross(camera.forward, SIMD3(0, 1, 0)))
+                    let right = SIMD3<Float>(cos(camera.yaw), 0, sin(camera.yaw))
                     hand = camera.position + right * 0.5 + camera.forward * 0.8 + SIMD3(0, 0.03, 0)
                 }
                 batches.append(
@@ -131,14 +171,17 @@ final class EntityRenderer {
                     let offset = SIMD3<Float>(
                         copy == 0 ? 0 : Float(copy % 2) * 0.08 - 0.04,
                         bob + Float(copy) * 0.015, copy == 0 ? 0 : Float(copy / 2) * 0.08 - 0.04)
-                    if stack.id < 256, let kind = BlockKind(rawValue: UInt8(stack.id)), kind.isSolid {
+                    if HeldItemGeometry.rendersAsBlock(stack.id),
+                        let kind = BlockKind(rawValue: UInt8(stack.id))
+                    {
                         batches.append(
                             Batch(
                                 texture: "terrain",
                                 vertices: blockVertices(
                                     state: BlockState(
                                         kind, metadata: UInt8(truncatingIfNeeded: stack.damage)),
-                                    position: position + offset, yaw: age / 20, scale: 0.25, light: light)))
+                                    position: position + offset, yaw: age / 20, scale: 0.25, light: light,
+                                    inventory: true)))
                     } else if let definition = stack.definition {
                         batches.append(
                             Batch(
@@ -175,20 +218,103 @@ final class EntityRenderer {
                 batches.append(
                     Batch(
                         texture: "item/arrows",
-                        vertices: arrow(entity: entity, position: position, light: light)))
+                        vertices: ArrowGeometry.vertices(
+                            position: position, yaw: viewYaw, pitch: pose.pitch,
+                            shake: max(0, Float(entity.pickupDelay) - partial), light: light),
+                        cull: .back))
             default:
                 let layers = EntityModels.layers(
-                    entity: entity, phase: animation.phase,
-                    amplitude: animation.amplitude, age: age)
+                    entity: pose, phase: entity.limbSwing - entity.limbSwingAmount * (1 - partial),
+                    amplitude: min(
+                        1,
+                        entity.previousLimbSwingAmount
+                            + (entity.limbSwingAmount - entity.previousLimbSwingAmount) * partial), age: age,
+                    partial: partial, headYaw: headYaw)
                 for layer in layers {
-                    let vertices = layer.parts.flatMap {
-                        $0.vertices(
-                            position: position, yaw: entity.yaw, scale: layer.scale,
-                            originY: layer.originY, tint: layer.tint * damageTint, light: light,
-                            opacity: layer.opacity)
+                    var transform = layer.transform
+                    if entity.deathTicks > 0 && entity.kind != "squid" {
+                        let progress = min(
+                            1, sqrt(max(0, (Float(entity.deathTicks) + partial - 1) / 20 * 1.6)))
+                        transform =
+                            HeldItemGeometry.rotation(
+                                progress * (entity.kind == "spider" ? 180 : 90), axis: SIMD3(0, 0, 1))
+                            * transform
                     }
-                    batches.append(Batch(texture: layer.texture, vertices: vertices, blended: layer.blended))
+                    let opacity: Float
+                    if layer.texture == "mob/spider_eyes" {
+                        let level = max(Int(sample.sky) - Int(skySubtraction), Int(sample.block))
+                        opacity =
+                            (1
+                                - BetaLighting.brightness(
+                                    level: level, ambient: world.dimension == -1 ? 0.1 : 0.05)) * 0.5
+                    } else {
+                        opacity = layer.opacity
+                    }
+                    var vertices = layer.parts.flatMap {
+                        $0.vertices(
+                            position: position, yaw: renderYaw, scale: layer.scale,
+                            originY: layer.originY, tint: layer.tint, light: layer.fullbright ? 255 : light,
+                            opacity: opacity, transform: transform)
+                    }
+                    if layer.uvOffset != .zero {
+                        vertices = vertices.map { vertex in
+                            BlockVertex(
+                                position: vertex.position, color: vertex.color,
+                                uv: vertex.uv + layer.uvOffset,
+                                opacity: vertex.opacity, lightSamples: vertex.lightSamples)
+                        }
+                    }
+                    batches.append(
+                        Batch(
+                            texture: layer.texture, vertices: vertices, blended: layer.blended,
+                            additive: layer.additive))
+                    if (entity.hurtTicks > 0 || entity.deathTicks > 0) && !layer.blended {
+                        let red = vertices.map { vertex -> BlockVertex in
+                            let shade = max(
+                                vertex.color.x / max(0.0001, layer.tint.x),
+                                vertex.color.y / max(0.0001, layer.tint.y),
+                                vertex.color.z / max(0.0001, layer.tint.z))
+                            return BlockVertex(
+                                position: vertex.position, color: SIMD3(shade, 0, 0), opacity: 0.4,
+                                textureWeight: 0, light: light)
+                        }
+                        batches.append(Batch(texture: "terrain", vertices: red, blended: true))
+                    }
+                    if entity.kind == "creeper", !layer.blended,
+                        Int(Float(entity.fuseTicks) / 28 * 10) & 1 != 0
+                    {
+                        let white = vertices.map {
+                            BlockVertex(
+                                position: $0.position, color: $0.color,
+                                opacity: min(1, Float(entity.fuseTicks) / 28 * 0.2), textureWeight: 0,
+                                light: light)
+                        }
+                        batches.append(Batch(texture: "terrain", vertices: white, blended: true))
+                    }
                 }
+                if entity.kind == "minecart", entity.metadata == 1 || entity.metadata == 2 {
+                    let contents = blockVertices(
+                        state: BlockState(entity.metadata == 1 ? .chest : .furnace),
+                        position: SIMD3(0, -0.140625, 0), yaw: -BetaVisualMath.pi / 2, scale: 0.75,
+                        light: light, inventory: true)
+                    let transform = layers.first?.transform ?? matrix_identity_float4x4
+                    let vertices = contents.map { vertex -> BlockVertex in
+                        let point = transform * SIMD4(vertex.position, 1)
+                        return BlockVertex(
+                            position: position
+                                + EntityModelPart.rotate(
+                                    SIMD3(point.x, point.y, point.z), by: SIMD3(0, -renderYaw, 0)),
+                            color: vertex.color, uv: vertex.uv, light: light)
+                    }
+                    batches.append(Batch(texture: "terrain", vertices: vertices))
+                }
+            }
+            if entity.fireTicks > 0 || entity.remoteFlags & 1 != 0 {
+                batches.append(
+                    Batch(
+                        texture: "terrain",
+                        vertices: EntityDecorationGeometry.fire(
+                            entity: entity, position: position, cameraYaw: camera.yaw)))
             }
             if entity.isLiving && entity.onGround {
                 let radius = Float(entity.width) * 0.55
@@ -205,7 +331,6 @@ final class EntityRenderer {
                             light: light, opacity: 0.3), blended: true))
             }
         }
-        var activePistons: Set<BlockPosition> = []
         for chunk in world.chunks.values where visibleChunks?.contains(chunk.position) != false {
             for (cell, tile) in chunk.blockEntities {
                 if case .sign(let lines) = tile, let state = world.state(at: cell) {
@@ -219,11 +344,7 @@ final class EntityRenderer {
                     batches.append(Batch(texture: "font/default", vertices: geometry.text))
                 }
                 guard case .piston(let state) = tile else { continue }
-                activePistons.insert(cell)
-                var animation = pistons[cell] ?? (state.progress, now)
-                if animation.progress != state.progress { animation = (state.progress, now) }
-                pistons[cell] = animation
-                let fraction = Float(min(1, max(0, (now - animation.time) * 20)))
+                let fraction = partial
                 guard state.interpolatedProgress(fraction) < 1 else { continue }
                 let local = SIMD3(Double(cell.x) + 0.5, Double(cell.y), Double(cell.z) + 0.5) - origin
                 let base = SIMD3(Float(local.x), Float(local.y), Float(local.z))
@@ -255,25 +376,22 @@ final class EntityRenderer {
                 }
             }
         }
-        pistons = pistons.filter { activePistons.contains($0.key) }
         encoder.setCullMode(.none)
+        guard let buffer = device.makeSharedBuffer(batches.vertices) else { return }
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         for blended in [false, true] {
-            encoder.setRenderPipelineState(blended ? transparentPipeline : opaquePipeline)
             encoder.setDepthStencilState(blended ? readDepth : writeDepth)
-            for batch in batches where batch.blended == blended {
-                guard !batch.vertices.isEmpty, let texture = texture(named: batch.texture) else { continue }
-                let buffer = batch.vertices.withUnsafeBytes { bytes -> MTLBuffer? in
-                    guard let address = bytes.baseAddress else { return nil }
-                    return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-                }
-                guard let buffer else { continue }
+            for draw in batches.draws where draw.blended == blended {
+                guard let texture = texture(named: draw.texture) else { continue }
                 encoder.setRenderPipelineState(
-                    batch.additive ? additivePipeline : (blended ? transparentPipeline : opaquePipeline))
+                    draw.additive ? additivePipeline : (blended ? transparentPipeline : opaquePipeline))
                 encoder.setFragmentTexture(texture, index: 0)
-                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: batch.vertices.count)
+                encoder.setCullMode(draw.cull)
+                encoder.drawPrimitives(
+                    type: .triangle, vertexStart: draw.range.lowerBound, vertexCount: draw.range.count)
             }
         }
+        encoder.setCullMode(.none)
     }
 
     static func lightning(seed: Int64, position: SIMD3<Float>) -> [BlockVertex] {
@@ -331,30 +449,25 @@ final class EntityRenderer {
     private func texture(named name: String) -> MTLTexture? {
         if name == "terrain" { return atlas }
         if name == "gui/items" { return items }
-        if let texture = textures[name] { return texture }
-        guard let root = Bundle.main.resourceURL,
-            let texture = try? loader.newTexture(
-                URL: root.appendingPathComponent("Vanilla/\(name).png"),
-                options: [
-                    .origin: MTKTextureLoader.Origin.topLeft, .SRGB: false,
-                ])
-        else { return nil }
-        textures[name] = texture
-        return texture
+        return textures.texture(name)
     }
 
     private func blockVertices(
         state: BlockState, position: SIMD3<Float>, yaw: Float,
-        scale: Float, light: UInt8
+        scale: Float, light: UInt8, inventory: Bool = false
     ) -> [BlockVertex] {
-        let key = UInt16(state.kind.rawValue) << 8 | UInt16(state.metadata)
+        let key = UInt32(state.kind.rawValue) << 8 | UInt32(state.metadata) | (inventory ? 1 << 16 : 0)
         let source: [BlockVertex]
         if let cached = blockModels[key] {
             source = cached
         } else {
             var world = BlockWorld()
             world.setBlock(state, at: BlockPosition(0, 0, 0))
-            source = BlockMesh(world: world).vertices
+            source =
+                BlockMesh(
+                    world: world, blockAt: BlockPosition(0, 0, 0),
+                    options: BlockMeshOptions(smoothLighting: false, inventory: inventory)
+                ).vertices
             blockModels[key] = source
         }
         return source.map { vertex in
@@ -369,7 +482,7 @@ final class EntityRenderer {
         position: SIMD3<Float>, camera: Camera, width: Float, height: Float,
         index: Int, light: UInt8
     ) -> [BlockVertex] {
-        let right = simd_normalize(simd_cross(camera.forward, SIMD3(0, 1, 0))) * width / 2
+        let right = SIMD3<Float>(cos(camera.yaw), 0, sin(camera.yaw)) * width / 2
         let up = SIMD3<Float>(0, height, 0)
         let points = [position - right, position + right, position + right + up, position - right + up]
         let x = Float(index & 15) / 16
@@ -379,22 +492,6 @@ final class EntityRenderer {
             points: points,
             uv: [SIMD2(x, y + size), SIMD2(x + size, y + size), SIMD2(x + size, y), SIMD2(x, y)],
             color: SIMD3(repeating: 1), light: light)
-    }
-
-    private func arrow(entity: GameEntity, position: SIMD3<Float>, light: UInt8) -> [BlockVertex] {
-        var result: [BlockVertex] = []
-        for rotation in [Float.pi / 4, Float.pi * 3 / 4] {
-            let points = [SIMD3<Float>(-8, -2, 0), SIMD3(8, -2, 0), SIMD3(8, 2, 0), SIMD3(-8, 2, 0)].map {
-                let rolled = EntityModelPart.rotate($0, by: SIMD3(rotation, 0, 0)) * 0.05625
-                let rotated = EntityModelPart.rotate(
-                    rolled, by: SIMD3(0, -entity.yaw - .pi / 2, -entity.pitch))
-                return position + rotated
-            }
-            result += quad(
-                points: points, uv: [SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(0.5, 5 / 32), SIMD2(0, 5 / 32)],
-                color: SIMD3(repeating: 1), light: light)
-        }
-        return result
     }
 
     private func quad(

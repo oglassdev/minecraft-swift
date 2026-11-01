@@ -56,7 +56,8 @@ struct WorldServiceTests {
         inventory.armor[3] = ItemStack(id: 310, damage: 12)
         let initialPlayer = SavedPlayer(
             position: SIMD3(8.5, 64, 8.5), velocity: .zero, yaw: 0.7, pitch: -0.3,
-            health: 17, inventory: inventory)
+            health: 17, inventory: inventory, air: 42, fireTicks: 99, fallDistance: 4.25, onGround: true,
+            hurtTicks: 7, deathTicks: 2, attackTicks: 11)
         let initialLevel = SavedLevel(
             seed: 37, time: 1200, spawn: BlockPosition(8, 64, 8), player: initialPlayer,
             name: "Actor fixture", nextEntityID: 99,
@@ -120,6 +121,11 @@ struct WorldServiceTests {
         netherLevel.player.yaw = -0.75
         netherLevel.player.pitch = 0.2
         netherLevel.player.health = 11
+        netherLevel.player.air = 23
+        netherLevel.player.fireTicks = 50
+        netherLevel.player.fallDistance = 1.25
+        netherLevel.player.onGround = false
+        netherLevel.player.hurtTicks = 4
         netherLevel.player.inventory.slots[0]?.count = 5
         netherLevel.player.inventory.slots[3] = maps.craft(at: netherLevel.player.position, dimension: -1)
         maps.applyNetwork(id: 8, bytes: [0, 5, 6, 30, 31])
@@ -189,6 +195,14 @@ struct WorldServiceTests {
         #expect(
             actual.inventory == expected.inventory && actual.health == expected.health
                 && actual.dimension == expected.dimension)
+        #expect(
+            actual.air == expected.air && actual.fireTicks == expected.fireTicks
+                && actual.fallDistance == expected.fallDistance)
+        #expect(actual.onGround == expected.onGround && actual.hurtTicks == expected.hurtTicks)
+        #expect(actual.deathTicks == expected.deathTicks && actual.attackTicks == expected.attackTicks)
+        #expect(
+            actual.sleeping == expected.sleeping && actual.sleepTicks == expected.sleepTicks
+                && actual.bedSpawn == expected.bedSpawn)
     }
 
     private func expectMaps(_ actual: BetaMapCollection, equals expected: BetaMapCollection) {

@@ -11,7 +11,7 @@ enum HeldItemGeometry {
         ].contains(Int(id))
     }
 
-    static func sprite(index: Int, light: UInt8) -> [BlockVertex] {
+    static func sprite(index: Int) -> [BlockVertex] {
         let u0 = Float(index & 15) / 16
         let u1 = u0 + 15.99 / 256
         let v0 = Float(index >> 4) / 16
@@ -20,7 +20,7 @@ enum HeldItemGeometry {
         var vertices: [BlockVertex] = []
         func quad(_ points: [SIMD3<Float>], _ uv: [SIMD2<Float>], shade: Float = 1) {
             vertices += [0, 1, 2, 0, 2, 3].map {
-                BlockVertex(position: points[$0], color: SIMD3(repeating: shade), uv: uv[$0], light: light)
+                BlockVertex(position: points[$0], color: SIMD3(repeating: shade), uv: uv[$0])
             }
         }
         quad(
@@ -67,22 +67,24 @@ enum HeldItemGeometry {
     }
 
     static func rotation(_ degrees: Float, axis: SIMD3<Float>) -> simd_float4x4 {
-        simd_float4x4(simd_quatf(angle: degrees * .pi / 180, axis: axis))
+        simd_float4x4(simd_quatf(angle: degrees * BetaVisualMath.pi / 180, axis: simd_normalize(axis)))
     }
 }
 
 @MainActor
 final class FirstPersonRenderer {
     private let device: MTLDevice
-    private let atlas: MTLTexture
-    private let items: MTLTexture
-    private let loader: MTKTextureLoader
-    private var textures: [String: MTLTexture] = [:]
+    private var atlas: MTLTexture
+    private var items: MTLTexture
+    private let textures: NamedTextures
     private var displayedItem: ItemStack?
     private var equip: Float = 0
+    private var equipProgress: Float = 0
+    private var previousEquipProgress: Float = 0
+    private var equippedSlot = -1
     private var swing: Float = 0
-    private var swinging = false
     private var blockModels: [UInt32: [BlockVertex]] = [:]
+    private var spriteModels: [Int: [BlockVertex]] = [:]
     private var mapTexture: MTLTexture?
     private var mapKey: (id: Int16, revision: UInt64)?
 
@@ -90,29 +92,38 @@ final class FirstPersonRenderer {
         self.device = device
         self.atlas = atlas
         self.items = items
-        loader = MTKTextureLoader(device: device)
+        textures = NamedTextures(device: device)
+    }
+
+    func reload(atlas: MTLTexture, items: MTLTexture) {
+        self.atlas = atlas
+        self.items = items
+        textures.removeAll()
+    }
+
+    func advance(heldItem: ItemStack?, slot: Int, ticks: Int) {
+        for _ in 0..<ticks {
+            previousEquipProgress = equipProgress
+            let sameSlot = slot == equippedSlot && heldItem?.id == displayedItem?.id
+            let sameItem = heldItem?.id == displayedItem?.id && heldItem?.damage == displayedItem?.damage
+            let matches = sameSlot || sameItem
+            if matches { displayedItem = heldItem }
+            equipProgress += min(0.4, max(-0.4, (matches ? 1 : 0) - equipProgress))
+            if equipProgress < 0.1 {
+                displayedItem = heldItem
+                equippedSlot = slot
+            }
+        }
     }
 
     func draw(
-        encoder: MTLRenderCommandEncoder, heldItem: ItemStack?, mining: Bool, delta: Float,
+        encoder: MTLRenderCommandEncoder, swingProgress: Float, partialTick: Float,
         light: UInt8, uniforms: Renderer.Uniforms, pipeline: MTLRenderPipelineState,
         mapPipeline: MTLRenderPipelineState, depth: MTLDepthStencilState,
         map: BetaMapData?, marker: BetaMapMarker?, pitch: Float
     ) {
-        let changed = heldItem?.id != displayedItem?.id || heldItem?.damage != displayedItem?.damage
-        equip = min(1, max(0, equip + (changed ? -1 : 1) * delta * 8))
-        if changed && equip < 0.1 { displayedItem = heldItem }
-        if mining && !swinging {
-            swinging = true
-            swing = 0
-        }
-        if swinging {
-            swing += delta / 0.3
-            if swing >= 1 {
-                swing = mining ? swing.truncatingRemainder(dividingBy: 1) : 0
-                swinging = mining
-            }
-        }
+        equip = previousEquipProgress + (equipProgress - previousEquipProgress) * partialTick
+        swing = swingProgress
         var uniforms = uniforms
         encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(depth)
@@ -124,10 +135,10 @@ final class FirstPersonRenderer {
                 mapPipeline: mapPipeline)
             return
         }
-        let rootSwing = sin(sqrt(swing) * .pi)
-        let sinSwing = sin(swing * .pi)
-        let squaredSwing = sin(swing * swing * .pi)
-        let wave = sin(sqrt(swing) * .pi * 2)
+        let rootSwing = BetaVisualMath.sine(sqrt(swing) * BetaVisualMath.pi)
+        let sinSwing = BetaVisualMath.sine(swing * BetaVisualMath.pi)
+        let squaredSwing = BetaVisualMath.sine(swing * swing * BetaVisualMath.pi)
+        let wave = BetaVisualMath.sine(sqrt(swing) * BetaVisualMath.pi * 2)
         let t = HeldItemGeometry.translation
         let r = HeldItemGeometry.rotation
         let scale = HeldItemGeometry.scale
@@ -152,14 +163,23 @@ final class FirstPersonRenderer {
                     world.setBlock(
                         BlockState(kind, metadata: UInt8(truncatingIfNeeded: stack.damage)),
                         at: BlockPosition(0, 0, 0))
-                    source = BlockMesh(world: world).vertices
+                    source =
+                        BlockMesh(
+                            world: world, blockAt: BlockPosition(0, 0, 0),
+                            options: BlockMeshOptions(smoothLighting: false, inventory: true)
+                        ).vertices
                     blockModels[key] = source
                 }
                 matrix = outer * r(90, y) * t(SIMD3(repeating: -0.5))
                 textureName = "terrain"
             } else {
-                source = HeldItemGeometry.sprite(
-                    index: definition.iconIndex(damage: stack.damage), light: light)
+                let index = definition.iconIndex(damage: stack.damage)
+                if let cached = spriteModels[index] {
+                    source = cached
+                } else {
+                    source = HeldItemGeometry.sprite(index: index)
+                    spriteModels[index] = source
+                }
                 matrix =
                     outer * t(SIMD3(0, -0.3, 0)) * scale(1.5) * r(50, y) * r(335, z)
                     * t(SIMD3(-0.9375, -0.0625, 0))
@@ -199,12 +219,12 @@ final class FirstPersonRenderer {
         let x = SIMD3<Float>(1, 0, 0)
         let y = SIMD3<Float>(0, 1, 0)
         let z = SIMD3<Float>(0, 0, 1)
-        let rootSwing = sin(sqrt(swing) * .pi)
-        let sinSwing = sin(swing * .pi)
-        let squaredSwing = sin(swing * swing * .pi)
-        let wave = sin(sqrt(swing) * .pi * 2)
+        let rootSwing = BetaVisualMath.sine(sqrt(swing) * BetaVisualMath.pi)
+        let sinSwing = BetaVisualMath.sine(swing * BetaVisualMath.pi)
+        let squaredSwing = BetaVisualMath.sine(swing * swing * BetaVisualMath.pi)
+        let wave = BetaVisualMath.sine(sqrt(swing) * BetaVisualMath.pi * 2)
         let tiltProgress = min(1, max(0, 1 + pitch * 180 / .pi / 45 + 0.1))
-        let tilt = -cos(tiltProgress * .pi) * 0.5 + 0.5
+        let tilt = -BetaVisualMath.cosine(tiltProgress * BetaVisualMath.pi) * 0.5 + 0.5
         let outer =
             t(SIMD3(-rootSwing * 0.4, wave * 0.2, -sinSwing * 0.2))
             * t(SIMD3(0, -(1 - equip) * 1.2 - tilt * 0.5 + 0.04, -0.72)) * r(90, y) * r(-tilt * 85, z)
@@ -288,11 +308,7 @@ final class FirstPersonRenderer {
 
     private func encode(vertices: [BlockVertex], texture: MTLTexture, encoder: MTLRenderCommandEncoder) {
         guard !vertices.isEmpty else { return }
-        let buffer = vertices.withUnsafeBytes { bytes -> MTLBuffer? in
-            guard let address = bytes.baseAddress else { return nil }
-            return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-        }
-        guard let buffer else { return }
+        guard let buffer = device.makeSharedBuffer(vertices) else { return }
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
@@ -301,13 +317,6 @@ final class FirstPersonRenderer {
     private func texture(named name: String) -> MTLTexture? {
         if name == "terrain" { return atlas }
         if name == "gui/items" { return items }
-        if let texture = textures[name] { return texture }
-        guard let root = Bundle.main.resourceURL,
-            let texture = try? loader.newTexture(
-                URL: root.appendingPathComponent("Vanilla/\(name).png"),
-                options: [.origin: MTKTextureLoader.Origin.topLeft, .SRGB: false])
-        else { return nil }
-        textures[name] = texture
-        return texture
+        return textures.texture(name)
     }
 }

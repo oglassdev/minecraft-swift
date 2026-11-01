@@ -6,6 +6,7 @@ public struct LoadedGame: Sendable {
     public let center: ChunkPosition
     public let maps: BetaMapCollection
     public let radius: Int
+    public let tickState: WorldTickState
 }
 
 public actor WorldService {
@@ -27,7 +28,8 @@ public actor WorldService {
 
     public func flush() {}
 
-    public func load(radius: Int = 3) throws -> LoadedGame {
+    public func load(radius: Int = 3, progress: (@Sendable (Double) -> Void)? = nil) throws -> LoadedGame {
+        progress?(0)
         let saved = try storage.loadLevel()
         let seed = saved?.seed ?? newWorldSeed
         generator = BetaTerrainGenerator(seed: seed)
@@ -39,17 +41,20 @@ public actor WorldService {
                 ChunkPosition(Int(floor($0.player.position.x)) >> 4, Int(floor($0.player.position.z)) >> 4)
             } ?? ChunkPosition(0, 0)
         var world = BlockWorld(seed: seed, dimension: currentDimension)
+        var tickState = WorldTickState(
+            randomSeed: Int64.random(in: .min ... .max),
+            coordinateSeed: Int64.random(in: .min ... .max))
         let spawn: BlockPosition
         if let saved {
             spawn = saved.spawn
         } else {
-            var random = JavaRandom(seed: Int64.random(in: .min ... .max))
-            _ = random.nextInt(bound: 12000)
-            spawn = try BetaSpawn.initialGlobal(world: &world, random: &random, loadChunk: loadChunk)
+            spawn = try BetaSpawn.initialGlobal(
+                world: &world, random: &tickState.random, loadChunk: loadChunk)
             center = spawn.chunk
         }
-        try loadRegion(around: center, into: &world, radius: radius)
+        try loadRegion(around: center, into: &world, radius: radius) { progress?($0 * 0.8) }
         populate(&world)
+        progress?(0.9)
         let level: SavedLevel
         if let saved {
             level = saved
@@ -61,9 +66,10 @@ public actor WorldService {
             level = SavedLevel(seed: seed, time: 0, spawn: spawn, player: player, name: newWorldName)
         }
         WorldLighting.rebuild(world: &world)
+        progress?(1)
         return LoadedGame(
             world: world, level: level, center: center, maps: try mapStorage.load(),
-            radius: min(16, max(1, radius)))
+            radius: min(16, max(1, radius)), tickState: tickState)
     }
 
     public func extend(
@@ -132,7 +138,10 @@ public actor WorldService {
             }
             try storage.saveLevel(level)
             return LoadedGame(
-                world: world, level: level, center: center, maps: try maps ?? mapStorage.load(), radius: 3)
+                world: world, level: level, center: center, maps: try maps ?? mapStorage.load(), radius: 3,
+                tickState: WorldTickState(
+                    randomSeed: Int64.random(in: .min ... .max),
+                    coordinateSeed: Int64.random(in: .min ... .max)))
         } catch {
             currentDimension = previousDimension
             storage.dimension = previousDimension
@@ -152,16 +161,22 @@ public actor WorldService {
         }
     }
 
-    private func loadRegion(around center: ChunkPosition, into world: inout BlockWorld, radius: Int = 3)
+    private func loadRegion(
+        around center: ChunkPosition, into world: inout BlockWorld, radius: Int = 3,
+        progress: ((Double) -> Void)? = nil
+    )
         throws
     {
         let radius = min(16, max(1, radius))
+        var completed = 0
+        let count = (radius * 2 + 1) * (radius * 2 + 1)
         for x in (center.x - radius)...(center.x + radius) {
             for z in (center.z - radius)...(center.z + radius) {
                 try Task.checkCancellation()
                 let position = ChunkPosition(x, z)
-                guard world.chunks[position] == nil else { continue }
-                world.setChunk(try loadChunk(at: position))
+                if world.chunks[position] == nil { world.setChunk(try loadChunk(at: position)) }
+                completed += 1
+                progress?(Double(completed) / Double(count))
             }
         }
     }

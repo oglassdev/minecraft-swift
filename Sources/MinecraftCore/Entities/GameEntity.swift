@@ -8,6 +8,25 @@ public struct GameEntity: Identifiable, Codable, Sendable {
     public var velocity: SIMD3<Double>
     public var yaw: Float = 0
     public var pitch: Float = 0
+    public var previousYaw: Float = 0
+    public var previousPitch: Float = 0
+    public var vehicleYaw: Float?
+    public var vehicleReversed = false
+    public var vehicleDamage = 0
+    public var vehicleHitTicks = 0
+    public var vehicleForwardDirection = 1
+    public var previousLimbSwingAmount: Float = 0
+    public var limbSwingAmount: Float = 0
+    public var limbSwing: Float = 0
+    public var previousBodyYawDegrees: Float = 0
+    public var bodyYawDegrees: Float = 0
+    public var previousWingRotation: Float = 0
+    public var wingRotation: Float = 0
+    public var previousWingSpread: Float = 0
+    public var wingSpread: Float = 0
+    public var wingSpeed: Float = 1
+    public var previousSquishAmount: Float = 0
+    public var squishAmount: Float = 0
     public var width: Double
     public var height: Double
     public var health: Int
@@ -33,6 +52,17 @@ public struct GameEntity: Identifiable, Codable, Sendable {
     public var fireTicks = 0
     public var fallDistance: Float = 0
     public var hurtTicks = 0
+    public var hurtResistance = 0
+    public var previousHealth = 0
+    public var maxHurtTicks = 0
+    public var attackedAtYaw: Float = 0
+    public var ambientTicks = 0
+    public var isInWater = false
+    public var isInLava = false
+    public var isWet = false
+    public var inWeb = false
+    var pendingHurtSound = false
+    var pendingFizz = false
     public var lastDamage = 0
     public var deathTicks = 0
     public var lootDropped = false
@@ -118,6 +148,13 @@ public struct GameEntity: Identifiable, Codable, Sendable {
         if self.kind == "fallingSand" { fallingBlock = BlockState(.sand) }
     }
 
+    public var hasProjectileRotation: Bool {
+        switch kind {
+        case "arrow", "snowball", "egg", "fireball": true
+        default: false
+        }
+    }
+
     public var bounds: AxisAlignedBox {
         if kind == "painting", let anchor = paintingAnchor,
             let motive = BetaPainting.motive(named: paintingMotive ?? "Kebab")
@@ -136,6 +173,10 @@ public struct GameEntity: Identifiable, Codable, Sendable {
             true
         default: false
         }
+    }
+
+    public var preventsBlockSpawning: Bool {
+        isLiving || ["primedTnt", "fallingSand", "boat", "minecart"].contains(kind)
     }
 
     var eyePosition: SIMD3<Double> {

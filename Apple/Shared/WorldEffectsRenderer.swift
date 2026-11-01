@@ -5,9 +5,8 @@ import simd
 @MainActor
 final class WorldEffectsRenderer {
     private let device: MTLDevice
-    private let atlas: MTLTexture
-    private let loader: MTKTextureLoader
-    private var textures: [String: MTLTexture] = [:]
+    private var atlas: MTLTexture
+    private let textures: NamedTextures
     private var particles: [Particle] = []
     private var roofCache: [SIMD2<Int>: Int] = [:]
     private var biomeCache: [SIMD2<Int>: BetaBiome] = [:]
@@ -36,7 +35,12 @@ final class WorldEffectsRenderer {
     init(device: MTLDevice, atlas: MTLTexture) {
         self.device = device
         self.atlas = atlas
-        loader = MTKTextureLoader(device: device)
+        textures = NamedTextures(device: device)
+    }
+
+    func reload(atlas: MTLTexture) {
+        self.atlas = atlas
+        textures.removeAll()
     }
 
     func draw(
@@ -70,7 +74,7 @@ final class WorldEffectsRenderer {
         var terrain: [BlockVertex] = []
         var sprites: [BlockVertex] = []
         let step = Double(delta * 20)
-        let right = simd_normalize(simd_cross(camera.forward, SIMD3(0, 1, 0)))
+        let right = SIMD3<Float>(cos(camera.yaw), 0, sin(camera.yaw))
         let up = simd_cross(right, camera.forward)
         for index in particles.indices {
             particles[index].age += delta
@@ -98,25 +102,25 @@ final class WorldEffectsRenderer {
             let light = particle.fullbright ? 255 : sample.sky << 4 | sample.block
             let frame =
                 particle.animated ? max(0, 7 - Int(particle.age / particle.lifetime * 8)) : particle.index
-            let origin = SIMD2(Float(frame & 15), Float(frame >> 4)) / 16 + particle.crop
+            let tileOrigin = SIMD2(Float(frame & 15), Float(frame >> 4)) / 16 + particle.crop
             let uvSize: Float = particle.terrain ? 3.996 / 256 : 15.99 / 256
             let half = particle.size * min(1, particle.age * 32 / particle.lifetime)
-            let points = [
-                position - right * half - up * half, position + right * half - up * half,
-                position + right * half + up * half, position - right * half + up * half,
-            ]
-            let uv = [
-                origin + SIMD2(0, uvSize), origin + SIMD2(uvSize, uvSize), origin + SIMD2(uvSize, 0), origin,
-            ]
-            let vertices = Self.quad(points, uv: uv, color: particle.color, light: light)
-            if particle.terrain { terrain += vertices } else { sprites += vertices }
+            for corner in Self.cornerOrder {
+                let vertex = BlockVertex(
+                    position: position + right * (corner.x * half) + up * (corner.y * half),
+                    color: particle.color,
+                    uv: tileOrigin + SIMD2((corner.x + 1) / 2, (1 - corner.y) / 2) * uvSize, light: light)
+                if particle.terrain { terrain.append(vertex) } else { sprites.append(vertex) }
+            }
         }
         particles.removeAll { $0.age >= $0.lifetime }
         encoder.setCullMode(.none)
         encoder.setDepthStencilState(depth)
         encoder.setRenderPipelineState(pipeline)
         draw(vertices: terrain, texture: atlas, encoder: encoder)
-        if let texture = texture("particles") { draw(vertices: sprites, texture: texture, encoder: encoder) }
+        if let texture = textures.texture("particles") {
+            draw(vertices: sprites, texture: texture, encoder: encoder)
+        }
         guard rain > 0, world.dimension == 0 else { return }
         let radius = fancy ? 10 : 5
         if roofRevision != world.revision {
@@ -205,10 +209,10 @@ final class WorldEffectsRenderer {
             }
         }
         encoder.setRenderPipelineState(weatherPipeline)
-        if let texture = texture("environment/rain") {
+        if let texture = textures.texture("environment/rain") {
             draw(vertices: rainVertices, texture: texture, encoder: encoder)
         }
-        if let texture = texture("environment/snow") {
+        if let texture = textures.texture("environment/snow") {
             draw(vertices: snowVertices, texture: texture, encoder: encoder)
         }
     }
@@ -283,6 +287,10 @@ final class WorldEffectsRenderer {
         }
     }
 
+    private static let cornerOrder: [SIMD2<Float>] = [
+        SIMD2(-1, -1), SIMD2(1, -1), SIMD2(1, 1), SIMD2(-1, -1), SIMD2(1, 1), SIMD2(-1, 1),
+    ]
+
     private static func quad(
         _ points: [SIMD3<Float>], uv: [SIMD2<Float>], color: SIMD3<Float> = SIMD3(repeating: 1), light: UInt8,
         opacity: Float = 1, textureWeight: Float = 1
@@ -294,24 +302,9 @@ final class WorldEffectsRenderer {
         }
     }
 
-    private func texture(_ name: String) -> MTLTexture? {
-        if let cached = textures[name] { return cached }
-        guard let root = Bundle.main.resourceURL,
-            let result = try? loader.newTexture(
-                URL: root.appendingPathComponent("Vanilla/\(name).png"),
-                options: [.origin: MTKTextureLoader.Origin.topLeft, .SRGB: false])
-        else { return nil }
-        textures[name] = result
-        return result
-    }
-
     private func draw(vertices: [BlockVertex], texture: MTLTexture, encoder: MTLRenderCommandEncoder) {
         guard !vertices.isEmpty else { return }
-        let buffer = vertices.withUnsafeBytes { bytes -> MTLBuffer? in
-            guard let address = bytes.baseAddress else { return nil }
-            return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-        }
-        guard let buffer else { return }
+        guard let buffer = device.makeSharedBuffer(vertices) else { return }
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)

@@ -9,6 +9,14 @@ extension GameSession {
         }
     }
 
+    func tickAchievementNotice() {
+        if achievementNoticeTicks > 0 {
+            achievementNoticeTicks -= 1
+        } else if achievementNotice != nil {
+            achievementNotice = nil
+        }
+    }
+
     func saveStatistics() {
         do {
             try StatisticsStorage(directory: gameDirectory.appendingPathComponent("stats")).save(statistics)
@@ -36,7 +44,9 @@ extension GameSession {
         }
         notifyAchievements(statistics.recordTravel(from: previous, to: player.position, mode: mode))
         if groundedBefore && pressed.contains(.jump) && player.velocity.y > 0 { statistics.recordJump() }
-        if healthBefore > player.health { statistics.recordDamageTaken(healthBefore - player.health) }
+        let damage = player.damageTakenTotal - recordedDamageTaken
+        if damage > 0 { statistics.recordDamageTaken(damage) }
+        recordedDamageTaken = player.damageTakenTotal
         statisticsFallDistance += max(0, Float(previous.y - player.position.y))
         if player.onGround {
             statistics.recordFall(distance: statisticsFallDistance)
@@ -45,12 +55,16 @@ extension GameSession {
             statisticsFallDistance = 0
         }
         for id in [UInt16(17), 334] {
-            let old = inventoryBefore.slots.compactMap { $0 }.filter { $0.id == id }.reduce(0) {
-                $0 + $1.count
-            }
-            let new = inventory.slots.compactMap { $0 }.filter { $0.id == id }.reduce(0) { $0 + $1.count }
-            if new > old { notifyAchievements(statistics.recordPickup(ItemStack(id: id, count: new - old))) }
+            let gained = count(of: id, in: inventory) - count(of: id, in: inventoryBefore)
+            if gained > 0 { notifyAchievements(statistics.recordPickup(ItemStack(id: id, count: gained))) }
         }
-        if achievementNoticeTicks > 0 { achievementNoticeTicks -= 1 } else { achievementNotice = nil }
+        tickAchievementNotice()
+    }
+
+    private func count(of id: UInt16, in inventory: PlayerInventory) -> Int {
+        inventory.slots.reduce(0) { total, slot in
+            guard let slot, slot.id == id else { return total }
+            return total + slot.count
+        }
     }
 }

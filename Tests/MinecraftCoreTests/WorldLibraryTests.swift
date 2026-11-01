@@ -80,6 +80,34 @@ struct WorldLibraryTests {
         }
     }
 
+    @Test func renamePreservesBackupMetadataAndDeleteStaysInsideCatalog() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalog = WorldCatalog(directory: directory)
+        let world = try catalog.create(name: "Fixture", seedText: "123")
+        let fields: [String: NBTTag] = [
+            "LevelName": .string("Fixture"), "RandomSeed": .long(123), "LastPlayed": .long(456),
+            "version": .int(19132), "Player": .compound(["Health": .short(13)]),
+            "FutureField": .string("preserve"),
+        ]
+        try writeLevel(in: world.directory, filename: "level.dat_old", fields: fields)
+        try Data([1, 2, 3]).write(to: world.directory.appendingPathComponent("level.dat"))
+        try catalog.rename(world, name: "  Renamed  ")
+        let renamed = try #require(try catalog.worlds().first)
+        #expect(renamed.name == "Renamed" && renamed.seed == 123)
+        #expect(renamed.lastPlayed == Date(timeIntervalSince1970: 0.456))
+        let compressed = try Data(contentsOf: world.directory.appendingPathComponent("level.dat"))
+        let document = try NBTCodec.decode(NBTCompression.gzip.decompress(compressed))
+        var expected = fields
+        expected["LevelName"] = .string("Renamed")
+        #expect(document.tag.compoundValue?["Data"]?.compoundValue == expected)
+        let unrelated = WorldCatalog(directory: directory.appendingPathComponent("Unrelated"))
+        #expect(throws: CocoaError.self) { try unrelated.delete(renamed) }
+        #expect(FileManager.default.fileExists(atPath: world.directory.path))
+        try catalog.delete(renamed)
+        #expect(!FileManager.default.fileExists(atPath: world.directory.path))
+    }
+
     @Test func optionsReadWriteMatchesBetaSettingsAndRetainsUnknownFields() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

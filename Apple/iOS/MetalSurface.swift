@@ -63,15 +63,8 @@ struct TouchControls: View {
             .padding(.trailing, 28)
             .padding(.bottom, 68)
         }
-        .allowsHitTesting(
-            !session.inventoryOpen && !session.isPaused && !session.isLoading && !session.worldMenuOpen
-                && !session.chatOpen
-                && !session.signEditorOpen
-        )
-        .onChange(of: session.inventoryOpen) { _, open in if open { releaseControls() } }
-        .onChange(of: session.isPaused) { _, paused in if paused { releaseControls() } }
-        .onChange(of: session.chatOpen) { _, open in if open { releaseControls() } }
-        .onChange(of: session.signEditorOpen) { _, open in if open { releaseControls() } }
+        .allowsHitTesting(!session.isInputBlocked)
+        .onChange(of: session.isInputBlocked) { _, blocked in if blocked { releaseControls() } }
         .onDisappear { releaseControls() }
     }
 

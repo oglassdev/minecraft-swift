@@ -5,7 +5,7 @@ extension EntitySimulation {
         _ wolf: inout GameEntity, world: BlockWorld, player: Player, attacking: Bool, water: Bool,
         inventory: PlayerInventory
     ) -> [BlockEvent] {
-        let riding = entities.contains { $0.riderID == wolf.id }
+        let riding = ridingEntityID(for: wolf.id) != nil
         if !attacking && !pathHasPoint(wolf) && wolf.owner != nil && !riding {
             let owner: LivingTarget?
             if wolf.owner?.caseInsensitiveCompare(localPlayerName) == .orderedSame && player.health > 0 {
@@ -49,8 +49,11 @@ extension EntitySimulation {
         {
             let area = AxisAlignedBox(
                 min: wolf.position - SIMD3(16, 4, 16), max: wolf.position + SIMD3(17, 5, 17))
-            let sheep = entities.filter { $0.kind == "sheep" && $0.health > 0 && $0.bounds.intersects(area) }
-            if !sheep.isEmpty { wolf.targetEntityID = sheep[random.nextInt(bound: sheep.count)].id }
+            let sheep = contactCandidates(in: area).filter {
+                entities[$0].kind == "sheep" && entities[$0].health > 0
+                    && entities[$0].bounds.intersects(area)
+            }
+            if !sheep.isEmpty { wolf.targetEntityID = entities[sheep[random.nextInt(bound: sheep.count)]].id }
         }
         if water { wolf.metadata &= ~1 }
         let interesting =

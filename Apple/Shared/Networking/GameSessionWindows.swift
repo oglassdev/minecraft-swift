@@ -76,7 +76,7 @@ extension GameSession {
         for slot in 9..<45 {
             inventory.slots[slot < 36 ? slot : slot - 36] = state.playerWindow[slot]
         }
-        for slot in 5..<9 { inventory.armor[slot - 5] = state.playerWindow[slot] }
+        for slot in 5..<9 { inventory.armor[8 - slot] = state.playerWindow[slot] }
         if state.windowID == 0 {
             crafting = CraftingGrid()
             for slot in 0..<4 { crafting.slots[slot] = state.playerWindow[slot + 1] }
@@ -108,27 +108,19 @@ extension GameSession {
 
     func refreshMultiplayerHUD() {
         guard let state = multiplayer else { return }
-        cursorLabel = label(cursor)
         furnaceOpen = state.windowID != 0 && state.windowType == 2
         containerTitle = state.windowID != 0 ? state.windowTitle : ""
         if state.windowID != 0 && (state.windowType == 0 || state.windowType == 3) {
             containerItems = Array(state.windowSlots.prefix(state.containerSlotCount))
-            containerLabels = containerItems.map(label)
         } else {
-            containerLabels = []
             containerItems = []
         }
-        if furnaceOpen {
-            furnaceItems = Array(state.windowSlots.prefix(3))
-            furnaceLabels = furnaceItems.map(label)
-        }
+        if furnaceOpen { furnaceItems = Array(state.windowSlots.prefix(3)) }
         craftingWidth = state.windowID != 0 && state.windowType == 1 ? 3 : 2
         let slots = state.windowID == 0 ? state.playerWindow : state.windowSlots
-        if !furnaceOpen && containerLabels.isEmpty {
+        if !furnaceOpen && containerItems.isEmpty {
             craftingItems = Array(slots.dropFirst().prefix(craftingWidth * craftingWidth))
-            craftingLabels = craftingItems.map(label)
             craftingResultItem = slots.first ?? nil
-            craftingResultLabel = label(craftingResultItem)
         }
     }
 
@@ -154,7 +146,6 @@ extension GameSession {
         inventoryOpen = false
         furnaceOpen = false
         furnaceProgress = 0
-        containerLabels = []
         containerItems = []
         containerTitle = ""
         cursor = nil
@@ -177,55 +168,31 @@ extension GameSession {
         multiplayerWindowClick(slot: slot + 1, secondary: secondary)
     }
 
-    func multiplayerWindowClick(slot: Int, secondary: Bool) {
-        guard let state = multiplayer, inventoryOpen else { return }
-        var slots = state.windowID == 0 ? state.playerWindow : state.windowSlots
-        guard slots.indices.contains(slot), state.pendingClicks.count < 64 else { return }
-        let previous = slots[slot]
-        let snapshot = MultiplayerClickSnapshot(
-            playerSlots: state.playerWindow, windowSlots: state.windowSlots, cursor: cursor)
-        let craftingWindow = state.windowID == 0 || state.windowType == 1
-        if craftingWindow && slot == 0 {
-            guard let result = previous else { return }
-            if let cursor,
-                !cursor.canStack(with: result) || cursor.count + result.count > cursor.maximumStackSize
-            {
-                return
-            }
-            if cursor == nil { cursor = result } else { cursor?.count += result.count }
-            var grid = CraftingGrid(width: craftingWidth, height: craftingWidth)
-            for index in grid.slots.indices { grid.slots[index] = slots[index + 1] }
-            _ = grid.craft()
-            for index in grid.slots.indices { slots[index + 1] = grid.slots[index] }
-            slots[0] = grid.result
-        } else if state.windowType == 2 && slot == 2 {
-            guard let output = previous else { return }
-            if cursor == nil {
-                cursor = output
-                slots[slot] = nil
-            } else if cursor!.canStack(with: output), cursor!.count + output.count <= cursor!.maximumStackSize
-            {
-                cursor?.count += output.count
-                slots[slot] = nil
-            }
+    func multiplayerWindowClick(slot: Int, secondary: Bool, shift: Bool = false) {
+        guard let state = multiplayer, inventoryOpen, state.pendingClicks.count < 64 else { return }
+        let slots = state.windowID == 0 ? state.playerWindow : state.windowSlots
+        let kind: ContainerKind
+        if state.windowID == 0 {
+            kind = .player
         } else {
-            if state.windowID == 0 && (5...8).contains(slot), let cursor,
-                cursor.definition?.armorSlot != slot - 5
-            {
-                return
-            }
-            SlotTransfer.exchange(cursor: &cursor, slot: &slots[slot], secondary: secondary)
-            if craftingWindow && (1...(craftingWidth * craftingWidth)).contains(slot) {
-                var grid = CraftingGrid(width: craftingWidth, height: craftingWidth)
-                for index in grid.slots.indices { grid.slots[index] = slots[index + 1] }
-                slots[0] = grid.result
+            switch state.windowType {
+            case 1: kind = .workbench
+            case 2: kind = .furnace
+            case 3: kind = .dispenser
+            default: kind = .chest(state.containerSlotCount)
             }
         }
+        guard slots.indices.contains(slot) || slot == -999 else { return }
+        let snapshot = MultiplayerClickSnapshot(
+            playerSlots: state.playerWindow, windowSlots: state.windowSlots, cursor: cursor)
+        var container = ContainerInventory(kind: kind, slots: slots, cursor: cursor)
+        let result = container.click(slot: slot, secondary: secondary, shift: shift)
+        cursor = container.cursor
         if state.windowID == 0 {
-            state.playerWindow = slots
+            state.playerWindow = container.slots
             synchronizePlayerWindow()
         } else {
-            state.windowSlots = slots
+            state.windowSlots = container.slots
             synchronizeActiveWindow()
         }
         state.transactionID &+= 1
@@ -233,8 +200,7 @@ extension GameSession {
         state.client?.send(
             .windowClick(
                 window: state.windowID, slot: Int16(slot), button: secondary ? 1 : 0,
-                transaction: state.transactionID, shift: false, item: previous.map(BetaSlot.init)))
-        play("random.click", volume: 0.3)
+                transaction: state.transactionID, shift: shift, item: result.previous.map(BetaSlot.init)))
         refreshHUD()
     }
 }

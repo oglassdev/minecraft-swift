@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import MinecraftCore
 import QuartzCore
 import simd
 
@@ -25,13 +26,23 @@ final class AudioManager {
         var baseVolume: Float = 1
         var radius: Float = 16
         var priority = false
+        var sourceID = -1
         var expiresAt: CFTimeInterval = 0
         var active = false
     }
 
     var effectsVolume: Float = 1
     var musicVolume: Float = 1 {
-        didSet { musicPlayer?.volume = min(max(musicVolume, 0), 1) }
+        didSet {
+            if musicVolume == 0 {
+                musicPlayer?.stop()
+                musicPlayer = nil
+                musicState = .disabled
+            } else {
+                musicPlayer?.volume = min(max(musicVolume, 0), 1)
+                if oldValue == 0 && musicEnabled { musicState = .waiting }
+            }
+        }
     }
     var musicEnabled = true {
         didSet {
@@ -40,8 +51,7 @@ final class AudioManager {
                 musicPlayer = nil
                 musicState = .disabled
             } else if !oldValue {
-                musicWait = Double(Int.random(in: 0..<12_000)) / 20
-                musicState = .waiting
+                musicState = musicVolume == 0 ? .disabled : .waiting
             }
         }
     }
@@ -56,10 +66,15 @@ final class AudioManager {
     private var musicPlayer: AVAudioPlayer?
     private var recordPlayer: AVAudioPlayer?
     private var recordPosition: SIMD3<Float>?
+    private var recordBaseVolume: Float = 0
     private var currentMusicName = ""
-    private var musicWait = Double(Int.random(in: 0..<12_000)) / 20
-    private var previousUpdateTime = CACurrentMediaTime()
-    private var pausedAt: CFTimeInterval?
+    private var musicSchedule = BetaMusicSchedule(seed: Int64.random(in: .min ... .max))
+    private var effectRandom = JavaRandom(seed: Int64.random(in: .min ... .max))
+    private var musicRandom = JavaRandom(seed: Int64.random(in: .min ... .max))
+    private var recordRandom = JavaRandom(seed: Int64.random(in: .min ... .max))
+    private var nextVoice = 0
+    private var soundSequence = 0
+    private var isPaused = false
     private var listener = SIMD3<Float>.zero
     private var right = SIMD3<Float>(1, 0, 0)
 
@@ -76,7 +91,7 @@ final class AudioManager {
             guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1) else {
                 return
             }
-            for _ in 0..<32 {
+            for _ in 0..<28 {
                 let voice = Voice()
                 engine.attach(voice.player)
                 engine.attach(voice.speed)
@@ -99,27 +114,28 @@ final class AudioManager {
         volume: Float = 1,
         pitch: Float = 1
     ) -> Bool {
-        guard isAvailable, pausedAt == nil, volume > 0,
-            let path = manifest?.effects[event]?.randomElement()
+        guard isAvailable, effectsVolume != 0, volume > 0,
+            let paths = manifest?.effects[event], !paths.isEmpty
         else { return false }
+        let path = paths[effectRandom.nextInt(bound: paths.count)]
         self.listener = listener
         let now = CACurrentMediaTime()
-        let radius = 16 * max(volume, 1)
-        if let position, simd_distance(position, listener) >= radius { return false }
+        let parameters = BetaSoundParameters(
+            volume: volume, pitch: pitch,
+            effectsVolume: effectsVolume, listenerRelative: position == nil)
+        if let position, simd_distance(position, listener) >= parameters.radius { return false }
         do {
             let buffer = try soundBuffer(path: path)
             if !engine.isRunning { try engine.start() }
-            let voice =
-                voices.first(where: { !$0.active || $0.expiresAt <= now })
-                ?? voices.filter({ !$0.priority }).min(by: { $0.expiresAt < $1.expiresAt })
-                ?? (volume > 1 ? voices.min(by: { $0.expiresAt < $1.expiresAt }) : nil)
-            guard let voice else { return false }
+            soundSequence = (soundSequence + 1) % 256
+            guard let voice = acquireVoice(now: now, sourceID: soundSequence) else { return false }
             voice.player.stop()
-            voice.speed.rate = min(max(pitch, 0.5), 2)
+            voice.speed.rate = parameters.pitch
             voice.position = position
-            voice.baseVolume = min(volume, 1) * (position == nil ? 0.25 : 1)
-            voice.radius = radius
-            voice.priority = volume > 1
+            voice.baseVolume = parameters.volume
+            voice.radius = parameters.radius
+            voice.priority = parameters.priority
+            voice.sourceID = soundSequence
             voice.expiresAt =
                 now + Double(buffer.frameLength) / buffer.format.sampleRate / Double(voice.speed.rate)
             voice.active = true
@@ -138,9 +154,6 @@ final class AudioManager {
         let horizontal = SIMD3<Float>(-forward.z, 0, forward.x)
         if simd_length_squared(horizontal) > 0.0001 { right = simd_normalize(horizontal) }
         let now = CACurrentMediaTime()
-        let elapsed = max(0, now - previousUpdateTime)
-        previousUpdateTime = now
-        guard pausedAt == nil else { return }
         for voice in voices where voice.active {
             if voice.expiresAt <= now {
                 voice.player.stop()
@@ -152,82 +165,61 @@ final class AudioManager {
         if let recordPosition {
             let offset = recordPosition - listener
             let distance = simd_length(offset)
-            recordPlayer?.volume = max(0, 1 - distance / 64) * 0.5 * effectsVolume
+            recordPlayer?.volume =
+                BetaSoundParameters.linearAttenuation(distance: distance, radius: 64) * recordBaseVolume
             recordPlayer?.pan = distance > 0.001 ? simd_dot(offset / distance, right) : 0
         }
-        updateMusic(elapsed: elapsed)
     }
 
     func setPaused(_ paused: Bool) {
-        let now = CACurrentMediaTime()
-        previousUpdateTime = now
-        if paused, pausedAt == nil {
-            pausedAt = now
-            for voice in voices where voice.active { voice.player.pause() }
-            engine.pause()
-            musicPlayer?.pause()
-            recordPlayer?.pause()
-            if musicEnabled { musicState = .paused }
-        } else if !paused, let pausedAt {
-            let elapsed = now - pausedAt
-            self.pausedAt = nil
-            do {
-                if voices.contains(where: \.active) && !engine.isRunning { try engine.start() }
-                for voice in voices where voice.active {
-                    voice.expiresAt += elapsed
-                    voice.player.play()
-                }
-                if let musicPlayer {
-                    musicPlayer.play()
-                    musicState = .playing(currentMusicName)
-                } else if musicEnabled {
-                    musicState = .waiting
-                }
-                recordPlayer?.play()
-            } catch {
-                lastError = "Could not resume audio: \(error.localizedDescription)"
-            }
-        }
+        isPaused = paused
     }
 
     @discardableResult
     func playMusicNow() -> Bool {
-        guard musicEnabled, pausedAt == nil, let path = manifest?.music.randomElement() else { return false }
+        guard isAvailable, musicEnabled, musicVolume != 0, !isPaused,
+            recordPlayer?.isPlaying != true, let paths = manifest?.music, !paths.isEmpty
+        else { return false }
+        let path = paths[musicRandom.nextInt(bound: paths.count)]
+        musicSchedule.didStartTrack()
         do {
             guard let resourceURL else { return false }
+            musicPlayer?.stop()
             let player = try AVAudioPlayer(contentsOf: resourceURL.appendingPathComponent(path))
             player.volume = min(max(musicVolume, 0), 1)
             guard player.play() else {
-                musicWait = 30
                 return false
             }
             currentMusicName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
             musicPlayer = player
             musicState = .playing(currentMusicName)
-            musicWait = Double(Int.random(in: 12_000..<24_000)) / 20
             return true
         } catch {
             lastError = "Could not play music: \(error.localizedDescription)"
-            musicWait = 30
             return false
         }
     }
 
     @discardableResult
     func playRecord(_ name: String?, at position: SIMD3<Float>? = nil) -> Bool {
+        guard isAvailable, effectsVolume != 0 else { return false }
         recordPlayer?.stop()
         recordPlayer = nil
-        recordPosition = position
+        recordPosition = position ?? listener
         guard let name else { return true }
-        guard pausedAt == nil, let resourceURL, let path = manifest?.records[name]?.first else {
+        guard let resourceURL, let paths = manifest?.records[name], !paths.isEmpty else {
             return false
         }
+        let path = paths[recordRandom.nextInt(bound: paths.count)]
         do {
             musicPlayer?.stop()
             musicPlayer = nil
             musicState = .waiting
             let player = try AVAudioPlayer(contentsOf: resourceURL.appendingPathComponent(path))
-            player.volume = 0.5 * effectsVolume
+            recordBaseVolume = min(1, max(0, 0.5 * effectsVolume))
+            let distance = simd_distance(recordPosition ?? listener, listener)
+            player.volume =
+                BetaSoundParameters.linearAttenuation(distance: distance, radius: 64) * recordBaseVolume
             guard player.play() else { return false }
             recordPlayer = player
             return true
@@ -262,26 +254,45 @@ final class AudioManager {
     }
 
     private func positionVoice(_ voice: Voice) {
-        var gain = voice.baseVolume * effectsVolume
+        var gain = voice.baseVolume
         var pan: Float = 0
         if let position = voice.position {
             let offset = position - listener
             let distance = simd_length(offset)
-            gain *= max(0, 1 - distance / voice.radius)
+            gain *= BetaSoundParameters.linearAttenuation(distance: distance, radius: voice.radius)
             if distance > 0.001 { pan = simd_dot(offset / distance, right) }
         }
         voice.player.volume = min(max(gain, 0), 1)
         voice.player.pan = min(max(pan, -1), 1)
     }
 
-    private func updateMusic(elapsed: TimeInterval) {
-        guard musicEnabled, recordPlayer?.isPlaying != true else { return }
+    func tick() {
+        guard isAvailable, !isPaused, musicEnabled else { return }
         if let player = musicPlayer {
             guard !player.isPlaying else { return }
             musicPlayer = nil
             musicState = .waiting
         }
-        musicWait -= elapsed
-        if musicWait <= 0 { playMusicNow() }
+        if musicSchedule.tick(
+            musicPlaying: musicPlayer?.isPlaying == true,
+            recordPlaying: recordPlayer?.isPlaying == true, volume: musicVolume)
+        {
+            playMusicNow()
+        }
+    }
+
+    private func acquireVoice(now: CFTimeInterval, sourceID: Int) -> Voice? {
+        if let matching = voices.first(where: { $0.sourceID == sourceID }) { return matching }
+        for allowSteal in [false, true] {
+            for offset in voices.indices {
+                let index = (nextVoice + offset) % voices.count
+                let voice = voices[index]
+                if !voice.active || voice.expiresAt <= now || (allowSteal && !voice.priority) {
+                    nextVoice = (index + 1) % voices.count
+                    return voice
+                }
+            }
+        }
+        return nil
     }
 }

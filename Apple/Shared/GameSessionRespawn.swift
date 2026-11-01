@@ -10,16 +10,23 @@ extension GameSession {
         else { return }
         let time = worldTime % 24000
         guard time > 12541 && time < 23458 else {
-            statusText = "You can only sleep at night"
+            postChat("You can only sleep at night")
             return
         }
         sleepingBed = bed
+        let facing = Int(world.state(at: bed)?.metadata ?? 0) & 3
+        let offset = [SIMD2<Float>(0.5, 0.9), SIMD2(0.1, 0.5), SIMD2(0.5, 0.1), SIMD2(0.9, 0.5)][facing]
+        player.beginSleeping(
+            eyePosition: SIMD3(
+                Double(bed.x) + Double(offset.x), Double(bed.y) + Double(Float(0.9375)),
+                Double(bed.z) + Double(offset.y)))
+        camera.setPosition(player.eyePosition)
         sleepTicks = 1
         resetInput()
-        statusText = "Sleeping…"
     }
 
     func wakeFromBed(setSpawn: Bool) {
+        player.endSleeping()
         if let bed = sleepingBed, world[bed] == .bed {
             let exit = bedRespawnExit(at: bed, in: world) ?? BlockPosition(bed.x, bed.y + 1, bed.z)
             player.teleport(
@@ -29,7 +36,6 @@ extension GameSession {
         }
         sleepingBed = nil
         sleepTicks = 0
-        statusText = ""
     }
 
     /// BlockBed's two neighboring 3×3 scans require actual air above a normal cube.
@@ -77,6 +83,8 @@ extension GameSession {
                 position = SIMD3(Double(spawn.x) + 0.5, Double(spawn.y) + 1, Double(spawn.z) + 0.5)
             }
             player = Player(position: position)
+            showDeathScreen = false
+            deathScreenTicks = 0
             player.difficulty = options.difficulty
             if exit == nil {
                 while !BlockCollision.boxes(in: world, intersecting: player.bounds).isEmpty {
@@ -87,14 +95,10 @@ extension GameSession {
             isLoading = false
             isPaused = false
             accumulator = 0
-            let message = invalidBed ? "Your home bed was missing or obstructed" : "Respawned"
-            statusText = message
+            if invalidBed { postChat("Your home bed was missing or obstructed") }
             updateTarget()
             refreshHUD()
-            saveWorld { [weak self] in
-                guard let self, self.sessionGeneration == generation, !self.isMultiplayer else { return }
-                self.statusText = message
-            }
+            saveWorld()
         } catch {
             guard sessionGeneration == generation, !isMultiplayer else { return }
             isLoading = false

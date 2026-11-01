@@ -13,7 +13,7 @@ public struct WorldWeather: Sendable {
     public private(set) var previousThunderStrength: Float = 0
     public private(set) var lightningFlashTicks = 0
     private var random: JavaRandom
-    private var coordinateState: Int32
+    private var legacyTickState: WorldTickState
     private let climate: BetaClimateSource
 
     public init(
@@ -27,7 +27,8 @@ public struct WorldWeather: Sendable {
         rainStrength = raining ? 1 : 0
         thunderStrength = raining && thundering ? 1 : 0
         random = JavaRandom(seed: seed)
-        coordinateState = Int32(truncatingIfNeeded: seed)
+        legacyTickState = WorldTickState(
+            random: random, updateLCG: Int32(truncatingIfNeeded: seed), caveSoundCooldown: Int.max)
         climate = BetaClimateSource(seed: seed)
     }
 
@@ -45,7 +46,21 @@ public struct WorldWeather: Sendable {
         world: inout BlockWorld, players: [SIMD3<Double>], time: Int64,
         random: inout JavaRandom
     ) -> [BlockEvent] {
-        guard world.dimension != -1 else { return [] }
+        advanceTimers(dimension: world.dimension, random: &random)
+        var state = legacyTickState
+        state.prepareActiveChunks(players: players)
+        var events: [BlockEvent] = []
+        for chunk in state.activeChunks where world.chunks[chunk] != nil {
+            events +=
+                tickChunk(chunk, world: &world, players: players, tickState: &state, random: &random).events
+            for _ in 0..<80 { _ = state.nextPosition(in: chunk) }
+        }
+        legacyTickState = state
+        return events
+    }
+
+    public mutating func advanceTimers(dimension: Int8, random: inout JavaRandom) {
+        guard dimension != -1 else { return }
         if lightningFlashTicks > 0 { lightningFlashTicks -= 1 }
         if thunderTime <= 0 {
             thunderTime =
@@ -65,34 +80,52 @@ public struct WorldWeather: Sendable {
         rainStrength = min(1, max(0, Float(Double(rainStrength) + (raining ? 0.01 : -0.01))))
         thunderStrength = min(1, max(0, Float(Double(thunderStrength) + (thundering ? 0.01 : -0.01))))
 
-        let playerChunks = players.map { ChunkPosition(Int(floor($0.x / 16)), Int(floor($0.z / 16))) }
-        let active = world.chunks.keys.filter { chunk in
-            playerChunks.contains { abs($0.x - chunk.x) <= 9 && abs($0.z - chunk.z) <= 9 }
-        }.sorted { $0.x == $1.x ? $0.z < $1.z : $0.x < $1.x }
-        var events: [BlockEvent] = []
-        for chunk in active {
-            if random.nextInt(bound: 100000) == 0 && Double(rainStrength) > 0.2
-                && Double(weightedThunderStrength) > 0.9
-            {
-                let column = nextColumn(in: chunk)
-                let position = BlockPosition(
-                    column.x, precipitationHeight(x: column.x, z: column.z, in: world), column.z)
-                if canStrikeLightning(at: position, in: world) {
-                    events.append(
-                        .spawnEntity(
-                            kind: "lightningBolt",
-                            position: SIMD3(Double(position.x), Double(position.y), Double(position.z))))
-                    lightningFlashTicks = 2
+    }
+
+    mutating func tickChunk(
+        _ chunk: ChunkPosition, world: inout BlockWorld, players: [SIMD3<Double>],
+        tickState: inout WorldTickState, random: inout JavaRandom
+    ) -> BlockGrowth.Changes {
+        var changes = BlockGrowth.Changes()
+        if tickState.caveSoundCooldown == 0 {
+            let p = tickState.nextPosition(in: chunk)
+            if world[p] == nil {
+                let light = world.light(at: p)
+                if max(light.sky, light.block) <= random.nextInt(bound: 8) && light.sky == 0 {
+                    let center = p.center
+                    let distance = players.map { player -> Double in
+                        let delta = player + SIMD3(0, Double(Float(1.62)), 0) - center
+                        return delta.x * delta.x + delta.y * delta.y + delta.z * delta.z
+                    }.filter { $0 < 64 }.min()
+                    if let distance, distance > 4 {
+                        changes.events.append(
+                            .sound(
+                                name: "ambient.cave.cave", position: center,
+                                volume: 0.7, pitch: 0.8 + random.nextFloat() * 0.2))
+                        tickState.caveSoundCooldown = random.nextInt(bound: 12000) + 6000
+                    }
                 }
             }
-            if random.nextInt(bound: 16) == 0 {
-                let column = nextColumn(in: chunk)
-                applyPrecipitation(x: column.x, z: column.z, world: &world)
-            }
-            // World.tickBlocksAndAmbiance also consumes 80 LCG coordinates after its weather checks.
-            for _ in 0..<80 { advanceCoordinates() }
         }
-        return events
+        if random.nextInt(bound: 100000) == 0 && Double(rainStrength) > 0.2
+            && Double(weightedThunderStrength) > 0.9
+        {
+            let column = tickState.nextPosition(in: chunk)
+            let position = BlockPosition(
+                column.x, precipitationHeight(x: column.x, z: column.z, in: world), column.z)
+            if canStrikeLightning(at: position, in: world) {
+                changes.events.append(
+                    .spawnEntity(
+                        kind: "lightningBolt",
+                        position: SIMD3(Double(position.x), Double(position.y), Double(position.z))))
+                lightningFlashTicks = 2
+            }
+        }
+        if random.nextInt(bound: 16) == 0 {
+            let column = tickState.nextPosition(in: chunk)
+            changes.positions += applyPrecipitation(x: column.x, z: column.z, world: &world)
+        }
+        return changes
     }
 
     public mutating func stopPrecipitation() {
@@ -123,7 +156,7 @@ public struct WorldWeather: Sendable {
 
     public func skylightSubtraction(time: Int64, partialTick: Float = 1, dimension: Int8 = 0) -> Int {
         let angle = celestialAngle(time: time, partialTick: partialTick, dimension: dimension)
-        var darkness = 1 - (Self.cosine(angle * .pi * 2) * 2 + 0.5)
+        var darkness = 1 - (Self.cosine(angle * Float(Double.pi) * 2) * 2 + 0.5)
         darkness = min(1, max(0, darkness))
         darkness = 1 - darkness
         darkness = Float(Double(darkness) * (1 - Double(interpolatedRainStrength(partialTick) * 5) / 16))
@@ -166,19 +199,25 @@ public struct WorldWeather: Sendable {
         Double(weightedThunderStrength) > 0.9 && canRain(at: position, in: world)
     }
 
-    private func applyPrecipitation(x: Int, z: Int, world: inout BlockWorld) {
+    private func applyPrecipitation(x: Int, z: Int, world: inout BlockWorld) -> [BlockPosition] {
+        var changed: [BlockPosition] = []
         let y = precipitationHeight(x: x, z: z, in: world)
-        guard y >= 0, y < 128, precipitation(atX: x, z: z, in: world) == .snow else { return }
+        guard y >= 0, y < 128, precipitation(atX: x, z: z, in: world) == .snow else { return [] }
         let position = BlockPosition(x, y, z)
-        guard world.light(at: position).block < 10 else { return }
+        guard world.light(at: position).block < 10 else { return [] }
         let below = BlockPosition(x, y - 1, z)
         if Double(rainStrength) > 0.2 && world[position] == nil && world[below] != nil && world[below] != .ice
             && world[below]?.isMaterialSolid == true
             && BlockPlacement.canRemain(BlockState(.snowLayer), at: position, in: world)
         {
             world[position] = .snowLayer
+            changed.append(position)
         }
-        if world[below] == .stillWater && world.state(at: below)?.metadata == 0 { world[below] = .ice }
+        if world[below] == .stillWater && world.state(at: below)?.metadata == 0 {
+            world[below] = .ice
+            changed.append(below)
+        }
+        return changed
     }
 
     private func precipitationHeight(x: Int, z: Int, in world: BlockWorld) -> Int {
@@ -187,14 +226,6 @@ public struct WorldWeather: Sendable {
             if kind.isMaterialSolid || kind.isLiquid { return y + 1 }
         }
         return -1
-    }
-
-    private mutating func advanceCoordinates() { coordinateState = coordinateState &* 3 &+ 1_013_904_223 }
-
-    private mutating func nextColumn(in chunk: ChunkPosition) -> BlockPosition {
-        advanceCoordinates()
-        let bits = coordinateState >> 2
-        return BlockPosition(chunk.x * 16 + Int(bits & 15), 0, chunk.z * 16 + Int(bits >> 8 & 15))
     }
 
     private static func cosine(_ value: Float) -> Float {

@@ -19,6 +19,7 @@ public struct Player: Sendable {
     public static let width = Double(Float(0.6))
     public static let height = Double(Float(1.8))
     public private(set) var position: SIMD3<Double>
+    public private(set) var previousPosition: SIMD3<Double>
     public private(set) var velocity = SIMD3<Double>.zero
     public private(set) var onGround = false
     public private(set) var health: Int
@@ -26,31 +27,56 @@ public struct Player: Sendable {
     public private(set) var isInWater = false
     public private(set) var isInLava = false
     public private(set) var isSneaking = false
+    public private(set) var isSleeping = false
     public private(set) var isCollidingHorizontally = false
     public var localDamageEnabled = true
     public var difficulty = 2
     public var isMounted = false
-    private var fallDistance: Float = 0
+    public var random = JavaRandom(seed: Int64.random(in: .min ... .max))
+    public var healthFlashTime: Int { hurtResistance }
+    public private(set) var damageTakenTotal = 0
+    public private(set) var fallDistance: Float = 0
     private var cameraSmoothing: Float = 0
     private var hurtResistance = 0
     private var lastDamage = 0
-    private var fireTicks = 0
+    public private(set) var fireTicks = 0
     private var combatInventory = PlayerInventory()
     private var armorDamageRemainder = 0
-    private var walkedDistance: Float = 0
+    public private(set) var walkedDistance: Float = 0
+    public private(set) var previousWalkedDistance: Float = 0
+    public private(set) var cameraYaw: Float = 0
+    public private(set) var previousCameraYaw: Float = 0
+    public private(set) var cameraPitch: Float = 0
+    public private(set) var previousCameraPitch: Float = 0
+    public private(set) var swingProgress: Float = 0
+    public private(set) var previousSwingProgress: Float = 0
+    public private(set) var hurtTime = 0
+    public private(set) var maxHurtTime = 0
+    public private(set) var attackedAtYaw: Float = 0
+    public private(set) var previousHealth: Int
+    public private(set) var deathTime = 0
+    public private(set) var attackTime = 0
+    private var swingTicks = 0
+    private var swinging = false
+    private var viewYawDegrees: Float = 180
+    private var previousCameraSmoothing: Float = 0
+    private var entityCollisions: [AxisAlignedBox] = []
+    private var ticksExisted = 0
     private var nextStepDistance = 1
     private var stepEvents: [BlockEvent] = []
 
     public init(position: SIMD3<Double>, health: Int = 20) {
         self.position = position
+        previousPosition = position
         self.health = min(max(health, 0), 20)
+        previousHealth = self.health
     }
 
     public var bounds: AxisAlignedBox {
-        let radius = Self.width / 2
+        let radius = isSleeping ? Double(Float(0.2)) / 2 : Self.width / 2
         return AxisAlignedBox(
             min: position - SIMD3(radius, 0, radius),
-            max: position + SIMD3(radius, Self.height, radius)
+            max: position + SIMD3(radius, isSleeping ? Double(Float(0.2)) : Self.height, radius)
         )
     }
 
@@ -59,21 +85,61 @@ public struct Player: Sendable {
     }
 
     public var eyePositionDouble: SIMD3<Double> {
-        position + SIMD3(0, Double(Float(1.62)) - Double(cameraSmoothing), 0)
+        position + SIMD3(0, Double(isSleeping ? Float(0.2) : Float(1.62)) - Double(cameraSmoothing), 0)
+    }
+
+    public func interpolatedEyePosition(partialTick: Float) -> SIMD3<Double> {
+        let partial = min(1, max(0, partialTick))
+        let smoothing = previousCameraSmoothing + (cameraSmoothing - previousCameraSmoothing) * partial
+        return previousPosition + (position - previousPosition) * Double(partial)
+            + SIMD3(0, Double(isSleeping ? Float(0.2) : Float(1.62)) - Double(smoothing), 0)
+    }
+
+    public mutating func swing() {
+        swingTicks = -1
+        swinging = true
+    }
+
+    public mutating func beginSleeping(eyePosition: SIMD3<Double>) {
+        isSleeping = true
+        teleport(to: eyePosition - SIMD3(0, Double(Float(0.2)), 0))
+    }
+
+    public mutating func endSleeping() {
+        let eye = eyePositionDouble
+        isSleeping = false
+        teleport(to: eye - SIMD3(0, Double(Float(1.62)), 0))
+    }
+
+    public mutating func restoreRuntime(
+        air: Int, fireTicks: Int, fallDistance: Float, onGround: Bool,
+        hurtTime: Int = 0, deathTime: Int = 0, attackTime: Int = 0
+    ) {
+        self.air = air
+        self.fireTicks = fireTicks
+        self.fallDistance = fallDistance
+        self.onGround = onGround
+        self.hurtTime = hurtTime
+        maxHurtTime = hurtTime > 0 ? 10 : 0
+        self.deathTime = deathTime
+        self.attackTime = attackTime
     }
 
     public mutating func teleport(to position: SIMD3<Double>) {
         self.position = position
+        previousPosition = position
         velocity = .zero
         onGround = false
         fallDistance = 0
         cameraSmoothing = 0
+        previousCameraSmoothing = 0
     }
 
     public mutating func addVelocity(_ impulse: SIMD3<Double>) { velocity += impulse }
 
     mutating func knockBack(from origin: SIMD3<Double>) {
         let delta = position - origin
+        attackedAtYaw = Float(atan2(-delta.z, -delta.x)) * 180 / BetaMath.pi - viewYawDegrees
         let length = Double(Float(sqrt(delta.x * delta.x + delta.z * delta.z)))
         velocity /= 2
         if length > 0 {
@@ -83,7 +149,10 @@ public struct Player: Sendable {
         velocity.y = min(velocity.y + Double(Float(0.4)), Double(Float(0.4)))
     }
 
-    public mutating func displace(by movement: SIMD3<Double>, world: BlockWorld) {
+    public mutating func displace(
+        by movement: SIMD3<Double>, world: BlockWorld, entityCollisions: [AxisAlignedBox] = []
+    ) {
+        self.entityCollisions = entityCollisions
         move(movement, sneaking: false, world: world)
     }
 
@@ -100,7 +169,25 @@ public struct Player: Sendable {
         }
     }
 
-    public mutating func setHealthFromServer(_ amount: Int) { health = min(max(amount, 0), 20) }
+    public mutating func setHealthFromServer(_ amount: Int, animate: Bool = true) {
+        let next = min(max(amount, 0), 20)
+        if animate && next < health {
+            lastDamage = health - next
+            previousHealth = health
+            hurtResistance = 20
+            hurtTime = 10
+            maxHurtTime = 10
+        } else if next > health {
+            hurtResistance = 10
+        }
+        health = next
+    }
+
+    public mutating func animateHurt() {
+        hurtTime = 10
+        maxHurtTime = 10
+        attackedAtYaw = 0
+    }
 
     public mutating func strikeByLightning(inventory: inout PlayerInventory) {
         damage(5, inventory: &inventory)
@@ -120,6 +207,8 @@ public struct Player: Sendable {
             }
         }
         guard amount > 0 else { return false }
+        damageTakenTotal += amount
+        let fullHit = hurtResistance <= 10
         let applied: Int
         if hurtResistance > 10 {
             guard amount > lastDamage else { return false }
@@ -127,12 +216,22 @@ public struct Player: Sendable {
         } else {
             applied = amount
             hurtResistance = 20
+            previousHealth = health
+            hurtTime = 10
+            maxHurtTime = 10
+            attackedAtYaw = Bool.random() ? 0 : 180
         }
         lastDamage = amount
         let weighted = applied * (25 - combatInventory.armorProtection) + armorDamageRemainder
         combatInventory.damageArmor(by: applied)
         health = max(0, health - weighted / 25)
         armorDamageRemainder = weighted % 25
+        if fullHit {
+            stepEvents.append(
+                .sound(
+                    name: "random.hurt", position: eyePositionDouble, volume: 1,
+                    pitch: (random.nextFloat() - random.nextFloat()) * 0.2 + 1))
+        }
         return true
     }
 
@@ -147,10 +246,11 @@ public struct Player: Sendable {
     }
 
     public mutating func tick(
-        input: PlayerInput, yaw: Float, world: BlockWorld, inventory: inout PlayerInventory
+        input: PlayerInput, yaw: Float, world: BlockWorld, inventory: inout PlayerInventory,
+        entityCollisions: [AxisAlignedBox] = []
     ) {
         beginArmorUpdate(from: inventory)
-        tick(input: input, yaw: yaw, world: world)
+        tick(input: input, yaw: yaw, world: world, entityCollisions: entityCollisions)
         endArmorUpdate(in: &inventory)
     }
 
@@ -160,8 +260,40 @@ public struct Player: Sendable {
     func endArmorUpdate(in inventory: inout PlayerInventory) { inventory.armor = combatInventory.armor }
 
     /// Advances exactly one Beta simulation tick. Yaw uses the camera's radians convention.
-    public mutating func tick(input: PlayerInput, yaw: Float, world: BlockWorld) {
+    public mutating func tick(
+        input: PlayerInput, yaw: Float, world: BlockWorld, entityCollisions: [AxisAlignedBox] = []
+    ) {
+        self.entityCollisions = entityCollisions
+        previousPosition = position
+        previousCameraSmoothing = cameraSmoothing
+        previousWalkedDistance = walkedDistance
+        previousCameraYaw = cameraYaw
+        previousCameraPitch = cameraPitch
+        previousSwingProgress = swingProgress
+        viewYawDegrees = yaw * 180 / BetaMath.pi + 180
+        ticksExisted += 1
+        _ = random.nextInt(bound: 1000)
+        if localDamageEnabled && difficulty == 0 && health < 20 && ticksExisted % 20 == 0 { heal(1) }
+        if hurtTime > 0 { hurtTime -= 1 }
+        if attackTime > 0 { attackTime -= 1 }
+        if health <= 0 { deathTime += 1 }
+        if swinging {
+            swingTicks += 1
+            if swingTicks >= 8 {
+                swingTicks = 0
+                swinging = false
+            }
+        } else {
+            swingTicks = 0
+        }
+        swingProgress = Float(swingTicks) / 8
         if hurtResistance > 0 { hurtResistance -= 1 }
+        if isSleeping {
+            velocity = .zero
+            cameraYaw *= 0.6
+            cameraPitch *= 0.2
+            return
+        }
         isSneaking = input.sneak
         if input.sneak && cameraSmoothing < 0.2 { cameraSmoothing = 0.2 }
         let water = FluidPhysics.waterContact(
@@ -224,6 +356,12 @@ public struct Player: Sendable {
         applyBlockEffects(world)
         updateBreathing(world)
         if localDamageEnabled && position.y < -64 { health = 0 }
+        let horizontal =
+            onGround && health > 0
+            ? min(0.1, Float(sqrt(velocity.x * velocity.x + velocity.z * velocity.z))) : 0
+        let tilt: Float = !onGround && health > 0 ? Float(atan(-velocity.y * Double(Float(0.2)))) * 15 : 0
+        cameraYaw += (horizontal - cameraYaw) * 0.4
+        cameraPitch += (tilt - cameraPitch) * 0.8
     }
 
     private mutating func accelerate(forward: Float, strafe: Float, speed: Float, yaw: Float) {
@@ -275,14 +413,16 @@ public struct Player: Sendable {
             velocity = .zero
         }
         let requested = movement
-        var resolved = Self.resolve(movement, bounds: originalBox, world: world)
+        var resolved = resolve(movement, bounds: originalBox, world: world)
         let grounded = onGround || (movement.y != resolved.movement.y && movement.y < 0)
         if grounded, (onGround && sneaking) || cameraSmoothing < 0.05,
             movement.x != resolved.movement.x || movement.z != resolved.movement.z
         {
-            let raised = Self.resolve(SIMD3(movement.x, 0.5, movement.z), bounds: originalBox, world: world)
-            let obstacles = BlockCollision.boxes(
-                in: world, intersecting: originalBox.swept(by: SIMD3(movement.x, 0.5, movement.z)))
+            let raised = resolve(SIMD3(movement.x, 0.5, movement.z), bounds: originalBox, world: world)
+            let obstacles =
+                BlockCollision.boxes(
+                    in: world, intersecting: originalBox.swept(by: SIMD3(movement.x, 0.5, movement.z)))
+                + entityCollisions
             var down = -0.5
             for obstacle in obstacles { down = obstacle.clip(down, axis: 1, moving: raised.bounds) }
             let steppedMovement = raised.movement + SIMD3(0, down, 0)
@@ -320,10 +460,13 @@ public struct Player: Sendable {
         }
     }
 
-    private static func resolve(_ movement: SIMD3<Double>, bounds: AxisAlignedBox, world: BlockWorld)
+    private func resolve(_ movement: SIMD3<Double>, bounds: AxisAlignedBox, world: BlockWorld)
         -> (movement: SIMD3<Double>, bounds: AxisAlignedBox)
     {
-        let obstacles = BlockCollision.boxes(in: world, intersecting: bounds.swept(by: movement))
+        let swept = bounds.swept(by: movement)
+        let obstacles =
+            BlockCollision.boxes(in: world, intersecting: swept)
+            + entityCollisions.filter { $0.intersects(swept) }
         var movement = movement
         var bounds = bounds
         for axis in [1, 0, 2] {
@@ -387,7 +530,7 @@ public struct Player: Sendable {
     }
 
     private mutating func updateBreathing(_ world: BlockWorld) {
-        let eye = eyePositionDouble
+        let eye = eyePositionDouble + SIMD3(0, Double(Float(0.12)), 0)
         let cell = BlockPosition(Int(floor(eye.x)), Int(floor(eye.y)), Int(floor(eye.z)))
         if let state = world.state(at: cell), state.kind.rawValue == 8 || state.kind.rawValue == 9 {
             let level = state.metadata >= 8 ? 0 : Int(state.metadata)
@@ -403,6 +546,29 @@ public struct Player: Sendable {
             }
         }
         air = 300
+    }
+
+    public func isEyeUnderwater(in world: BlockWorld) -> Bool {
+        isInsideLiquid(water: true, in: world)
+    }
+
+    public func isEyeInLava(in world: BlockWorld) -> Bool {
+        isInsideLiquid(water: false, in: world)
+    }
+
+    private func isInsideLiquid(water: Bool, in world: BlockWorld) -> Bool {
+        let eye = eyePositionDouble + SIMD3(0, Double(Float(0.12)), 0)
+        let cell = BlockPosition(Int(floor(eye.x)), Int(floor(eye.y)), Int(floor(eye.z)))
+        guard let state = world.state(at: cell),
+            water
+                ? (state.kind == .water || state.kind == .stillWater)
+                : (state.kind == .lava || state.kind == .stillLava)
+        else {
+            return false
+        }
+        let level = state.metadata >= 8 ? 0 : Int(state.metadata)
+        let surface = Double(cell.y + 1) - Double(Float(level + 1) / 9 - 0.11111111)
+        return eye.y < surface
     }
 
     private func isSuffocating(_ world: BlockWorld) -> Bool {

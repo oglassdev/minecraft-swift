@@ -42,6 +42,11 @@ extension EntitySimulation {
         var entity = entities[hit.index]
         switch entity.kind {
         case "boat", "minecart":
+            if let rider = entity.riderID, rider != 0,
+                entities.first(where: { $0.id == rider })?.kind == "player"
+            {
+                return true
+            }
             if entity.kind == "minecart" && entity.metadata == 2 {
                 if inventory.selectedStack?.id == 263 {
                     _ = inventory.removeSelected()
@@ -51,7 +56,7 @@ extension EntitySimulation {
                     entity.position.x - player.position.x, entity.position.z - player.position.z)
             } else if entity.metadata == 0 {
                 let dismount = entity.riderID == 0
-                dismountPlayer()
+                if dismount { dismountPlayer(player: &player) } else { dismountPlayer() }
                 entity.riderID = dismount ? nil : 0
             } else {
                 return false
@@ -65,8 +70,9 @@ extension EntitySimulation {
                 _ = inventory.removeSelected()
                 entity.metadata |= 1
             } else if entity.metadata & 1 != 0, entity.riderID == nil || entity.riderID == 0 {
-                dismountPlayer()
-                entity.riderID = 0
+                let dismount = entity.riderID == 0
+                if dismount { dismountPlayer(player: &player) } else { dismountPlayer() }
+                entity.riderID = dismount ? nil : 0
             } else {
                 return false
             }
@@ -107,7 +113,7 @@ extension EntitySimulation {
             {
                 _ = inventory.removeSelected()
                 entity.health = min(20, entity.health + 3)
-                entity.hurtTicks = 10
+                entity.hurtResistance = 10
             } else if entity.owner?.caseInsensitiveCompare(localPlayerName) == .orderedSame {
                 entity.metadata ^= 1
                 entity.path = []
@@ -128,7 +134,33 @@ extension EntitySimulation {
         for index in entities.indices where entities[index].riderID == 0 { entities[index].riderID = nil }
     }
 
-    mutating func tickVehicle(_ entity: inout GameEntity, world: BlockWorld, player: inout Player)
+    private mutating func boatSplashes(_ entity: GameEntity, speed: Double) -> [BlockEvent] {
+        let angle = Double(entity.vehicleYaw ?? 0) * .pi / 180
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        var events: [BlockEvent] = []
+        var index = 0
+        while Double(index) < 1 + speed * 60 {
+            let offset = Double(random.nextFloat() * 2 - 1)
+            let side = Double(random.nextInt(bound: 2) * 2 - 1) * 0.7
+            let x: Double
+            let z: Double
+            if random.nextBoolean() {
+                x = entity.position.x - cosine * offset * 0.8 + sine * side
+                z = entity.position.z - sine * offset * 0.8 - cosine * side
+            } else {
+                x = entity.position.x + cosine + sine * offset * 0.7
+                z = entity.position.z + sine - cosine * offset * 0.7
+            }
+            events.append(
+                .particle(
+                    name: "splash", position: SIMD3(x, entity.position.y + entity.height / 2 - 0.125, z)))
+            index += 1
+        }
+        return events
+    }
+
+    mutating func tickVehicle(_ entity: inout GameEntity, world: inout BlockWorld, player: inout Player)
         -> [BlockEvent]
     {
         var events: [BlockEvent] = []
@@ -140,7 +172,9 @@ extension EntitySimulation {
                 let slice = AxisAlignedBox(
                     min: SIMD3(entity.bounds.min.x, lower, entity.bounds.min.z),
                     max: SIMD3(entity.bounds.max.x, upper, entity.bounds.max.z))
-                if EntityMotion.isFluid(in: world, bounds: slice, water: true) { submerged += 0.2 }
+                if EntityMotion.fluidSurfaceContact(in: world, bounds: slice, water: true) {
+                    submerged += 0.2
+                }
             }
             if submerged < 1 {
                 entity.velocity.y += Double(Float(0.04)) * (submerged * 2 - 1)
@@ -151,22 +185,37 @@ extension EntitySimulation {
             if entity.riderID == 0 {
                 entity.velocity.x += player.velocity.x * 0.2
                 entity.velocity.z += player.velocity.z * 0.2
-                EntityMotion.accelerate(&entity, forward: ridingInput.y, strafe: ridingInput.x, speed: 0.01)
             }
             entity.velocity.x = min(max(entity.velocity.x, -0.4), 0.4)
             entity.velocity.z = min(max(entity.velocity.z, -0.4), 0.4)
             if entity.onGround { entity.velocity *= 0.5 }
+            let collision = EntityMotion.move(
+                &entity, world: world, collisions: collisionView(player: player))
             let speed = sqrt(entity.velocity.x * entity.velocity.x + entity.velocity.z * entity.velocity.z)
-            let collision = EntityMotion.move(&entity, world: world)
+            if speed > 0.15 { events += boatSplashes(entity, speed: speed) }
             if collision && speed > 0.15 {
                 entity.health = 0
                 events += loot(for: entity)
+                entity.lootDropped = true
             } else {
                 entity.velocity *= SIMD3(Double(Float(0.99)), Double(Float(0.95)), Double(Float(0.99)))
             }
-            let delta = entity.position - entity.previousPosition
+            let delta = entity.previousPosition - entity.position
+            var yaw = Double(entity.vehicleYaw ?? 0)
             if delta.x * delta.x + delta.z * delta.z > 0.001 {
-                EntityMotion.face(&entity, toward: entity.position + delta, maximumTurn: BetaMath.pi / 9)
+                let target = Double(Float(atan2(delta.z, delta.x) * 180 / Double.pi))
+                var difference = (target - yaw).truncatingRemainder(dividingBy: 360)
+                if difference >= 180 { difference -= 360 }
+                if difference < -180 { difference += 360 }
+                yaw += min(max(difference, -20), 20)
+            }
+            entity.vehicleYaw = Float(yaw)
+            entity.yaw = Float(yaw) * BetaMath.pi / 180 - BetaMath.pi
+            for corner in 0..<4 {
+                let x = Int(floor(entity.position.x + (Double(corner % 2) - 0.5) * 0.8))
+                let y = Int(floor(entity.position.y + entity.height / 2))
+                let z = Int(floor(entity.position.z + (Double(corner / 2) - 0.5) * 0.8))
+                if world[BlockPosition(x, y, z)] == .snowLayer { world[BlockPosition(x, y, z)] = nil }
             }
             entity.pitch = 0
         } else {
@@ -176,11 +225,7 @@ extension EntitySimulation {
             if player.health == 0 {
                 entity.riderID = nil
             } else {
-                let y = entity.height / 2 - Double(Float(0.3)) - 0.5
-                let side =
-                    entity.kind == "boat"
-                    ? SIMD3(-Double(cos(entity.yaw)) * 0.4, 0, -Double(sin(entity.yaw)) * 0.4) : .zero
-                player.teleport(to: entity.position + SIMD3(0, y, 0) + side)
+                player.teleport(to: Self.riderPosition(on: entity, isPlayer: true))
             }
         }
         return events
@@ -235,7 +280,7 @@ extension EntitySimulation {
                 min(max(moving.x * passengerScale, -0.4), 0.4), 0,
                 min(max(moving.z * passengerScale, -0.4), 0.4))
             let requested = entity.velocity
-            _ = EntityMotion.move(&entity, world: world)
+            _ = EntityMotion.move(&entity, world: world, collisions: collisionView(player: player))
             let resolved = entity.velocity
             entity.velocity = moving
             if resolved.x != requested.x { entity.velocity.x = 0 }
@@ -331,7 +376,7 @@ extension EntitySimulation {
             entity.velocity.x = min(max(entity.velocity.x, -0.4), 0.4)
             entity.velocity.z = min(max(entity.velocity.z, -0.4), 0.4)
             if entity.onGround { entity.velocity *= 0.5 }
-            _ = EntityMotion.move(&entity, world: world)
+            _ = EntityMotion.move(&entity, world: world, collisions: collisionView(player: player))
             if !entity.onGround { entity.velocity *= Double(Float(0.95)) }
         }
         if burningFuel && random.nextInt(bound: 4) == 0 {
@@ -339,8 +384,21 @@ extension EntitySimulation {
             if entity.fuelTicks < 0 { entity.pushDirection = .zero }
             queuedEvents.append(.particle(name: "largesmoke", position: entity.position + SIMD3(0, 0.8, 0)))
         }
-        let delta = entity.position - entity.previousPosition
-        if delta.x * delta.x + delta.z * delta.z > 0.001 { entity.yaw = Float(atan2(delta.x, -delta.z)) }
+        let delta = entity.previousPosition - entity.position
+        var yaw = entity.vehicleYaw ?? 0
+        if delta.x * delta.x + delta.z * delta.z > 0.001 {
+            yaw = Float(atan2(delta.z, delta.x) * 180 / Double.pi)
+            if entity.vehicleReversed { yaw += 180 }
+        }
+        var difference = Double(yaw - (entity.vehicleYaw ?? 0)).truncatingRemainder(dividingBy: 360)
+        if difference >= 180 { difference -= 360 }
+        if difference < -180 { difference += 360 }
+        if difference < -170 || difference >= 170 {
+            yaw += 180
+            entity.vehicleReversed.toggle()
+        }
+        entity.vehicleYaw = yaw
+        entity.yaw = yaw * BetaMath.pi / 180 - BetaMath.pi
         entity.pitch = 0
     }
 
@@ -348,7 +406,32 @@ extension EntitySimulation {
         block.map { [27, 28, 66].contains($0.rawValue) } ?? false
     }
 
-    static func railPoint(_ point: SIMD3<Double>, world: BlockWorld) -> SIMD3<Double>? {
+    public static func railOffsetPoint(_ point: SIMD3<Double>, offset: Double, world: BlockWorld)
+        -> SIMD3<Double>?
+    {
+        var cell = BlockPosition(Int(floor(point.x)), Int(floor(point.y)), Int(floor(point.z)))
+        if isRail(world[BlockPosition(cell.x, cell.y - 1, cell.z)]) { cell.y -= 1 }
+        guard let state = world.state(at: cell), isRail(state.kind) else { return nil }
+        let metadata = Int(state.metadata) & (state.kind == .rail ? 15 : 7)
+        guard metadata < railEnds.count else { return nil }
+        let ends = railEnds[metadata]
+        let direction = SIMD2(Double(ends.1.x - ends.0.x), Double(ends.1.z - ends.0.z))
+        let length = sqrt(direction.x * direction.x + direction.y * direction.y)
+        var result = SIMD3(
+            point.x + direction.x / length * offset,
+            Double(cell.y + (metadata >= 2 && metadata <= 5 ? 1 : 0)),
+            point.z + direction.y / length * offset)
+        for end in [ends.0, ends.1]
+        where end.y != 0 && Int(floor(result.x)) - cell.x == end.x
+            && Int(floor(result.z)) - cell.z == end.z
+        {
+            result.y += Double(end.y)
+            break
+        }
+        return railPoint(result, world: world)
+    }
+
+    public static func railPoint(_ point: SIMD3<Double>, world: BlockWorld) -> SIMD3<Double>? {
         var cell = BlockPosition(Int(floor(point.x)), Int(floor(point.y)), Int(floor(point.z)))
         if isRail(world[BlockPosition(cell.x, cell.y - 1, cell.z)]) { cell.y -= 1 }
         guard let state = world.state(at: cell), isRail(state.kind) else { return nil }

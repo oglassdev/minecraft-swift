@@ -37,12 +37,10 @@ public struct CraftingGrid: Codable, Equatable, Sendable {
         for index in match.consumedSlots {
             guard var stack = slots[index] else { continue }
             stack.count -= 1
-            if stack.count > 0 {
-                slots[index] = stack
-            } else if let container = stack.definition?.containerItemID {
+            if let container = stack.definition?.containerItemID {
                 slots[index] = ItemStack(id: container)
             } else {
-                slots[index] = nil
+                slots[index] = stack.count > 0 ? stack : nil
             }
         }
         return match.result

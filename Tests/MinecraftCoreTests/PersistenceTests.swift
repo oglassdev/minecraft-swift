@@ -167,6 +167,65 @@ struct PersistenceTests {
         #expect(final.player.bedSpawn == nil && final.spawn == BlockPosition(1, 65, 2))
     }
 
+    @Test func originalPlayerRuntimeTagsRestoreAndRewriteActualState() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("level.dat")
+        let originalPlayer = try NBTCodec.decode(fixture(Self.javaPlayerRuntime)).tag
+        var fields: [String: NBTTag] = ["RandomSeed": .long(1), "Player": originalPlayer]
+        func write(_ fields: [String: NBTTag]) throws {
+            let document = NBTDocument(tag: .compound(["Data": .compound(fields)]))
+            try NBTCompression.gzip.compress(NBTCodec.encode(document)).write(to: url)
+        }
+        try write(fields)
+        let storage = WorldStorage(directory: directory)
+        var level = try #require(try storage.loadLevel())
+        #expect(level.player.air == 42 && level.player.fireTicks == 99)
+        #expect(level.player.fallDistance == 4.25 && level.player.onGround)
+        #expect(level.player.hurtTicks == 7 && level.player.deathTicks == 2 && level.player.attackTicks == 11)
+        #expect(level.player.sleeping && level.player.sleepTicks == 45)
+        #expect(
+            level.player.position == SIMD3(1.5, 64.9375 - Double(Float(0.2)), Double(Float(2) + Float(0.9))))
+        try storage.saveLevel(level)
+        let sleepingSave = try NBTCodec.decode(NBTCompression.gzip.decompress(Data(contentsOf: url)))
+        #expect(
+            sleepingSave.tag.compoundValue?["Data"]?.compoundValue?["Player"]?.compoundValue?["Pos"]
+                == originalPlayer.compoundValue?["Pos"])
+        level.player.air = -7
+        level.player.fireTicks = -1
+        level.player.fallDistance = 8.5
+        level.player.onGround = false
+        level.player.hurtTicks = 3
+        level.player.deathTicks = 0
+        level.player.attackTicks = 4
+        level.player.sleeping = false
+        level.player.sleepTicks = 0
+        try storage.saveLevel(level)
+        let saved = try NBTCodec.decode(NBTCompression.gzip.decompress(Data(contentsOf: url)))
+        let player = try #require(saved.tag.compoundValue?["Data"]?.compoundValue?["Player"]?.compoundValue)
+        #expect(player["Air"] == .short(-7) && player["Fire"] == .short(-1))
+        #expect(player["FallDistance"] == .float(8.5) && player["OnGround"] == .byte(0))
+        #expect(
+            player["HurtTime"] == .short(3) && player["DeathTime"] == .short(0)
+                && player["AttackTime"] == .short(4))
+        #expect(player["Sleeping"] == .byte(0) && player["SleepTimer"] == .short(0))
+        #expect(player["CustomPlayer"] == .string("keep runtime metadata"))
+        let reloaded = try #require(try WorldStorage(directory: directory).loadLevel()).player
+        #expect(
+            reloaded.air == -7 && reloaded.fireTicks == -1 && reloaded.fallDistance == 8.5
+                && !reloaded.onGround)
+        #expect(reloaded.hurtTicks == 3 && reloaded.deathTicks == 0 && reloaded.attackTicks == 4)
+        #expect(!reloaded.sleeping && reloaded.sleepTicks == 0)
+        fields["Player"] = .compound([:])
+        try write(fields)
+        let missingTags = try #require(try WorldStorage(directory: directory).loadLevel()).player
+        #expect(missingTags.air == 0 && missingTags.health == 10)
+        fields["Player"] = nil
+        try write(fields)
+        let fresh = try #require(try WorldStorage(directory: directory).loadLevel()).player
+        #expect(fresh.air == 300 && fresh.health == 20)
+    }
+
     @Test func regionReallocationReusesSectorsWithoutChangingNeighbors() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -222,6 +281,25 @@ struct PersistenceTests {
         let loaded = try #require(try storage.loadChunk(at: chunk.position))
         #expect(loaded.blockEntities == chunk.blockEntities)
         #expect(!loaded.isTerrainPopulated)
+    }
+
+    @Test func projectileSavedRotationUsesArrowAxesAndRestoresInterpolation() throws {
+        for kind in ["Arrow", "Snowball"] {
+            let original: NBTTag = .compound([
+                "id": .string(kind), "Pos": .list(.double, [.double(1), .double(64), .double(2)]),
+                "Rotation": .list(.float, [.float(135), .float(30)]),
+            ])
+            var nextID: Int64 = 1
+            let decoded = EntityNBT.decode([original], nextID: &nextID)
+            let entity = try #require(decoded.entities.first)
+            #expect(abs(entity.yaw - Float.pi / 4) < 0.000001)
+            #expect(abs(entity.pitch - Float.pi / 6) < 0.000001)
+            #expect(entity.previousYaw == entity.yaw && entity.previousPitch == entity.pitch)
+            let saved = try #require(EntityNBT.encode([entity], previous: decoded.entries).listValue?.first)
+            let rotation = try #require(saved.compoundValue?["Rotation"]?.listValue)
+            #expect(abs((rotation[0].doubleValue ?? 0) - 135) < 0.00002)
+            #expect(abs((rotation[1].doubleValue ?? 0) - 30) < 0.00002)
+        }
     }
 
     @Test func vanillaEntityKindsOffsetsAndUnknownTagsSurviveSaving() throws {
@@ -324,6 +402,8 @@ struct PersistenceTests {
     // These fixtures were encoded by Beta 1.7.3's original Java NBT classes.
     private static let javaPainting =
         "CgAACQAGTW90aW9uBgAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAANBaXIBLAEACE9uR3JvdW5kAAEAA0RpcgEJAAhSb3RhdGlvbgUAAAACQrQAAAAAAAAFAAxGYWxsRGlzdGFuY2UAAAAACAAGTW90aXZlAAdQb2ludGVyCQADUG9zBgAAAAM//wAAAAAAAEBQQAAAAAAAwAAAAAAAAAACAARGaXJlAAADAAVUaWxlWQAAAEAIAAJpZAAIUGFpbnRpbmcDAAVUaWxlWAAAAAIDAAVUaWxlWv////0A"
+    private static let javaPlayerRuntime =
+        "CgAACQAGTW90aW9uBgAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAxDdXN0b21QbGF5ZXIAFWtlZXAgcnVudGltZSBtZXRhZGF0YQIAClNsZWVwVGltZXIALQMABlNwYXduWQAAAEACAAZIZWFsdGgAEQMABlNwYXduWgAAACIDAAZTcGF3blj////0AgADQWlyACoBAAhPbkdyb3VuZAEDAAlEaW1lbnNpb24AAAAACQAIUm90YXRpb24FAAAAAkK0AADB8AAABQAMRmFsbERpc3RhbmNlQIgAAAEACFNsZWVwaW5nAQkAA1BvcwYAAAADP/gAAAAAAABAUDwAAAAAAEAHMzNAAAAAAgAJRGVhdGhUaW1lAAICAARGaXJlAGMCAAhIdXJ0VGltZQAHAgAKQXR0YWNrVGltZQALCQAJSW52ZW50b3J5AQAAAAAA"
     private static let javaNBT =
         "CgAAAQAEYnl0ZfkGAAZkb3VibGXAXuAAAAAAAAcABWJ5dGVzAAAABAB/gP8CAAVzaG9ydPsuCAAEdGV4dAAJQcCA7aC97biABQAFZmxvYXQ/oAAACQAEbGlzdAoAAAABCAAGbmVzdGVkAAN5ZXMACgAIY29tcG91bmQIAAZuZXN0ZWQAA3llcwADAANpbnT4pDLrBAAEbG9uZ+7d7wuCFn7rCQAFZW1wdHkBAAAAAAA="
     private static let javaChunk =

@@ -5,13 +5,19 @@ extension GameSession {
     var desiredChunkRadius: Int {
         let view = [16, 8, 4, 2][min(3, max(0, options.renderDistance))]
         let survey = heldItem?.id == 358 ? (world.dimension == -1 ? 4 : 8) : 0
-        return max(view, survey)
+        return max(9, view, survey)
     }
 
     func loadWorld() async {
         let generation = sessionGeneration
         do {
-            let loaded = try await service.load()
+            loadingProgress = 0
+            let loaded = try await service.load(radius: 9) { [weak self] progress in
+                Task { @MainActor in
+                    guard let self, generation == self.sessionGeneration else { return }
+                    self.loadingProgress = progress
+                }
+            }
             guard generation == sessionGeneration, !isMultiplayer else { return }
             adopt(loaded)
         } catch {
@@ -34,21 +40,36 @@ extension GameSession {
         let saved = loaded.level.player
         inventory = saved.inventory
         player = Player(position: saved.position, health: saved.health)
+        recordedDamageTaken = 0
+        hotbarPickupTicks = Array(repeating: 0, count: 9)
+        player.restoreRuntime(
+            air: saved.air, fireTicks: saved.fireTicks, fallDistance: saved.fallDistance,
+            onGround: saved.onGround, hurtTime: saved.hurtTicks, deathTime: saved.deathTicks,
+            attackTime: saved.attackTicks)
         player.difficulty = options.difficulty
         player.addVelocity(saved.velocity)
         camera = Camera(position: player.eyePosition, yaw: saved.yaw, pitch: saved.pitch)
+        showDeathScreen = saved.health <= 0
+        if saved.sleeping {
+            sleepingBed = BlockPosition(
+                Int(floor(saved.position.x)), Int(floor(saved.position.y + Double(Float(0.2)))),
+                Int(floor(saved.position.z)))
+            player.beginSleeping(eyePosition: saved.position + SIMD3(0, Double(Float(0.2)), 0))
+            wakeFromBed(setSpawn: false)
+        }
         lastStreamCenter = loaded.center
         streamedRadius = loaded.radius
         itemActions = ItemActions(seed: world.seed)
         blockSimulation = BlockSimulation(seed: world.seed)
-        entitySimulation = EntitySimulation(seed: world.seed)
+        entitySimulation = EntitySimulation(seed: world.seed, naturalSpawningEnabled: false)
         entitySimulation.restore(world.chunks.values.flatMap(\.entities))
         entitySimulation.reserveIDs(through: loaded.level.nextEntityID - 1)
         weather = loaded.level.weather
+        worldTickState = loaded.tickState
         rainStrength = weather.rainStrength
         thunderStrength = weather.weightedThunderStrength
-        statusText = ""
         isLoading = false
+        loadingProgress = nil
         streaming = false
         relighting = false
         evictionInProgress = false
@@ -117,24 +138,34 @@ extension GameSession {
         }
     }
 
-    func snapshotWithEntities() -> BlockWorld {
-        let grouped = Dictionary(grouping: entitySimulation.entities) {
-            ChunkPosition(Int(floor($0.position.x)) >> 4, Int(floor($0.position.z)) >> 4)
-        }
-        var snapshot = world
-        for original in world.chunks.values {
+    /// Chunks accepted by `include`, with the live entities standing in them attached.
+    func chunksWithEntities(where include: (Chunk) -> Bool = { _ in true }) -> [Chunk] {
+        let grouped = Dictionary(grouping: entitySimulation.entities, by: { chunkPosition(of: $0.position) })
+        return world.chunks.values.filter(include).map { original in
             var chunk = original
             chunk.entities = grouped[chunk.position] ?? []
-            snapshot.setChunk(chunk, updateLighting: false)
+            return chunk
         }
+    }
+
+    func snapshotWithEntities() -> BlockWorld {
+        var snapshot = world
+        for chunk in chunksWithEntities() { snapshot.setChunk(chunk, updateLighting: false) }
         return snapshot
+    }
+
+    func chunkPosition(of position: SIMD3<Double>) -> ChunkPosition {
+        ChunkPosition(Int(floor(position.x)) >> 4, Int(floor(position.z)) >> 4)
     }
 
     func savedLevel() -> SavedLevel {
         let savedPlayer = SavedPlayer(
             position: player.position, velocity: player.velocity,
             yaw: camera.yaw, pitch: camera.pitch, health: player.health, inventory: inventory,
-            dimension: world.dimension, bedSpawn: bedSpawn)
+            dimension: world.dimension, bedSpawn: bedSpawn,
+            air: player.air, fireTicks: player.fireTicks, fallDistance: player.fallDistance,
+            onGround: player.onGround, hurtTicks: player.hurtTime, deathTicks: player.deathTime,
+            attackTicks: player.attackTime, sleeping: player.isSleeping, sleepTicks: sleepTicks)
         return SavedLevel(
             seed: world.seed, time: worldTime, spawn: spawn, player: savedPlayer, name: worldName,
             nextEntityID: entitySimulation.nextEntityID, weather: weather)
@@ -150,15 +181,14 @@ extension GameSession {
             }
             return
         }
-        let snapshot = snapshotWithEntities()
+        let chunks = chunksWithEntities()
         let level = savedLevel()
         let mapSnapshot = maps
         let backend = service
         let generation = sessionGeneration
         Task {
             do {
-                try await backend.save(chunks: Array(snapshot.chunks.values), level: level, maps: mapSnapshot)
-                if generation == sessionGeneration, !isMultiplayer { statusText = "World saved" }
+                try await backend.save(chunks: chunks, level: level, maps: mapSnapshot)
             } catch {
                 if generation == sessionGeneration, !isMultiplayer {
                     errorMessage = "Could not save world: \(error.localizedDescription)"
@@ -171,25 +201,23 @@ extension GameSession {
 
     func evictDistantChunks() {
         guard !isMultiplayer, !evictionInProgress else { return }
-        let center = player.position
-        let centerChunk = ChunkPosition(Int(floor(center.x)) >> 4, Int(floor(center.z)) >> 4)
-        let snapshot = snapshotWithEntities()
+        let center = chunkPosition(of: player.position)
         let keepRadius = desiredChunkRadius + 2
-        let backend = service
-        let distant = snapshot.chunks.values.filter {
-            abs($0.position.x - centerChunk.x) > keepRadius || abs($0.position.z - centerChunk.z) > keepRadius
+        let distant = chunksWithEntities {
+            abs($0.position.x - center.x) > keepRadius || abs($0.position.z - center.z) > keepRadius
         }
         guard !distant.isEmpty else { return }
         evictionInProgress = true
+        let backend = service
         let generation = sessionGeneration
         let time = worldTime
+        let dimension = world.dimension
         Task {
             defer { if generation == sessionGeneration { evictionInProgress = false } }
             do {
-                try await backend.saveChunks(distant, worldTime: time, dimension: snapshot.dimension)
+                try await backend.saveChunks(distant, worldTime: time, dimension: dimension)
                 guard generation == sessionGeneration, !isMultiplayer else { return }
-                let currentCenter = ChunkPosition(
-                    Int(floor(player.position.x)) >> 4, Int(floor(player.position.z)) >> 4)
+                let currentCenter = chunkPosition(of: player.position)
                 var removed: Set<ChunkPosition> = []
                 for chunk in distant {
                     guard world.chunks[chunk.position]?.revision == chunk.revision,
@@ -200,10 +228,8 @@ extension GameSession {
                     removed.insert(chunk.position)
                 }
                 entitySimulation.remove(
-                    ids: entitySimulation.entities.filter {
-                        removed.contains(
-                            ChunkPosition(Int(floor($0.position.x)) >> 4, Int(floor($0.position.z)) >> 4))
-                    }.map(\.id))
+                    ids: entitySimulation.entities.filter { removed.contains(chunkPosition(of: $0.position)) }
+                        .map(\.id))
             } catch {
                 if generation == sessionGeneration {
                     errorMessage = "Could not save distant terrain: \(error.localizedDescription)"
@@ -213,6 +239,7 @@ extension GameSession {
     }
 
     func updatePortalContact() {
+        previousPortalTime = portalTime
         let bounds = player.bounds
         let lowY = max(0, Int(floor(bounds.min.y)))
         let highY = min(127, Int(floor(bounds.max.y)))
@@ -229,6 +256,7 @@ extension GameSession {
             }
         }
         if touching {
+            portalTime = min(1, portalTime + 0.0125)
             if portalCooldown > 0 {
                 portalCooldown = 10
                 portalTicks = 0
@@ -241,16 +269,20 @@ extension GameSession {
                 travel(to: destination, position: player.position * SIMD3(scale, 1, scale), placePortal: true)
             }
         } else {
+            portalTime = max(0, portalTime - 0.05)
             portalCooldown = max(0, portalCooldown - 1)
             portalTicks = max(0, portalTicks - 4)
         }
     }
 
     func respawnSingleplayer() {
-        returnCursorAndCrafting()
-        for stack in (inventory.slots + inventory.armor).compactMap({ $0 }) {
-            entitySimulation.drop(stack, at: player.position)
+        if isMultiplayer {
+            respawnMultiplayer()
+            return
         }
+        showDeathScreen = false
+        deathScreenTicks = 0
+        returnCursorAndCrafting()
         inventory = PlayerInventory()
         sleepingBed = nil
         sleepTicks = 0
@@ -260,14 +292,9 @@ extension GameSession {
                 to: 0, position: SIMD3(Double(target.x) + 0.5, Double(target.y) + 1, Double(target.z) + 0.5),
                 placePortal: false, respawning: true)
         } else {
-            streamingTask?.cancel()
-            sessionGeneration &+= 1
+            invalidateWorldTasks()
             let generation = sessionGeneration
-            streaming = false
-            relighting = false
-            evictionInProgress = false
             isLoading = true
-            statusText = "Respawning…"
             resetInput()
             Task { await finishSingleplayerRespawn(generation: generation) }
         }
@@ -284,17 +311,12 @@ extension GameSession {
             level.player.health = 20
             level.player.inventory = PlayerInventory()
         }
-        streamingTask?.cancel()
-        sessionGeneration &+= 1
+        invalidateWorldTasks()
         let generation = sessionGeneration
         portalTicks = 0
         portalCooldown = 10
-        streaming = false
-        relighting = false
-        evictionInProgress = false
         isLoading = true
         resetInput()
-        statusText = dimension == -1 ? "Entering the Nether…" : "Returning to the Overworld…"
         Task {
             do {
                 let loaded = try await backend.travel(

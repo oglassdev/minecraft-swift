@@ -65,10 +65,9 @@ public enum BlockCollision {
                 for z in Int(floor(bounds.min.z))...Int(floor(bounds.max.z)) {
                     let position = BlockPosition(x, y, z)
                     guard let state = world.state(at: position) else { continue }
-                    result.append(
-                        contentsOf: boxes(for: state, at: position, in: world).filter {
-                            $0.intersects(bounds)
-                        })
+                    for box in boxes(for: state, at: position, in: world) where box.intersects(bounds) {
+                        result.append(box)
+                    }
                 }
             }
         }

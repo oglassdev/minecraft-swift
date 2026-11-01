@@ -69,6 +69,18 @@ public enum BetaExplosion {
 }
 
 extension EntitySimulation {
+    public mutating func explode(
+        at center: SIMD3<Double>, power: Float, world: inout BlockWorld, player: inout Player,
+        inventory: inout PlayerInventory, worldRandom: inout JavaRandom
+    ) -> [BlockEvent] {
+        let saved = random
+        random = worldRandom
+        let events = explode(at: center, power: power, world: &world, player: &player, inventory: &inventory)
+        worldRandom = random
+        random = saved
+        return events
+    }
+
     struct ExplosionContext: Sendable {
         var position: SIMD3<Double>
         var power: Float

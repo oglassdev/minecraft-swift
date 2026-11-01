@@ -16,6 +16,7 @@ struct SingleplayerSnapshot {
     let itemActions: ItemActions
     let maps: BetaMapCollection
     let weather: WorldWeather
+    let worldTickState: WorldTickState
     let center: ChunkPosition?
 
     @MainActor init(_ game: GameSession) {
@@ -33,6 +34,7 @@ struct SingleplayerSnapshot {
         itemActions = game.itemActions
         maps = game.maps
         weather = game.weather
+        worldTickState = game.worldTickState
         center = game.lastStreamCenter
     }
 }
@@ -43,6 +45,7 @@ final class MultiplayerState {
     var client: MultiplayerClient?
     var localEntityID: Int32 = 0
     var receivedPosition = false
+    var receivedHealth = false
     var loadedChunks: Set<ChunkPosition> = []
     var fixedPositions: [Int64: SIMD3<Int32>] = [:]
     var playerWindow: [ItemStack?] = Array(repeating: nil, count: 45)
@@ -75,10 +78,8 @@ extension GameSession {
         isPaused = true
         resetInput()
         connectionPending = true
-        streamingTask?.cancel()
-        sessionGeneration &+= 1
+        invalidateWorldTasks()
         let generation = sessionGeneration
-        multiplayerStatus = "Saving singleplayer world…"
         returnCursorAndCrafting()
         saveWorld { [weak self] in
             guard let self, self.sessionGeneration == generation, self.connectionPending else { return }
@@ -89,23 +90,9 @@ extension GameSession {
             self.connectionPending = false
             self.isLoading = true
             self.isPaused = false
-            self.inventoryOpen = false
-            self.chatOpen = false
-            self.signEditorOpen = false
+            self.closeScreens()
             self.bedSpawn = nil
-            self.sleepingBed = nil
             self.flight = false
-            self.streaming = false
-            self.relighting = false
-            self.evictionInProgress = false
-            self.cursor = nil
-            self.crafting = CraftingGrid()
-            self.craftingWidth = 2
-            self.containerPositions = []
-            self.currentContainer = nil
-            self.containerLabels = []
-            self.containerTitle = ""
-            self.furnaceOpen = false
             self.entitySimulation = EntitySimulation(seed: 0, naturalSpawningEnabled: false)
             self.maps = BetaMapCollection()
             self.world = BlockWorld()
@@ -115,9 +102,8 @@ extension GameSession {
             self.camera.setPosition(self.player.eyePosition)
             self.particleEvents.removeAll()
             self.chatLines.removeAll()
+            self.chatRevision &+= 1
             self.audio.setPaused(true)
-            self.multiplayerStatus = "Connecting to \(host):\(port)…"
-            self.statusText = self.multiplayerStatus
             let client = MultiplayerClient(
                 onPacket: { [weak self] packet in
                     guard let self, self.sessionGeneration == generation, self.isMultiplayer else { return }
@@ -132,16 +118,13 @@ extension GameSession {
         }
     }
 
-    func disconnectMultiplayer() { endMultiplayer(reason: "Disconnected") }
+    func disconnectMultiplayer() { endMultiplayer(reason: nil) }
 
-    func endMultiplayer(reason: String) {
-        streamingTask?.cancel()
-        sessionGeneration &+= 1
+    /// Leaves the server and restores the singleplayer state; a `reason` is shown as an error.
+    func endMultiplayer(reason: String?) {
+        invalidateWorldTasks()
         connectionPending = false
-        guard let state = multiplayer else {
-            multiplayerStatus = reason
-            return
-        }
+        guard let state = multiplayer else { return }
         multiplayer = nil
         state.client?.disconnect()
         let saved = state.singleplayer
@@ -150,44 +133,33 @@ extension GameSession {
         world = saved.world
         worldTime = saved.worldTime
         player = saved.player
+        recordedDamageTaken = player.damageTakenTotal
         inventory = saved.inventory
         camera = saved.camera
         bedSpawn = saved.bedSpawn
-        sleepingBed = nil
         spawn = saved.spawn
         blockSimulation = saved.blockSimulation
         entitySimulation = saved.entitySimulation
         itemActions = saved.itemActions
         maps = saved.maps
         weather = saved.weather
+        worldTickState = saved.worldTickState
+        showDeathScreen = saved.player.health <= 0
         lastStreamCenter = saved.center
         rainStrength = weather.rainStrength
         thunderStrength = weather.weightedThunderStrength
         isMultiplayer = false
         isLoading = false
         isPaused = true
-        inventoryOpen = false
-        chatOpen = false
-        signEditorOpen = false
-        furnaceOpen = false
-        containerTitle = ""
-        containerLabels = []
-        containerPositions = []
-        currentContainer = nil
-        cursor = nil
-        crafting = CraftingGrid()
-        craftingWidth = 2
-        streaming = false
-        relighting = false
-        evictionInProgress = false
+        closeScreens()
         particleEvents.removeAll()
-        sleepTicks = 0
+        chatLines.removeAll()
+        chatRevision &+= 1
         accumulator = 0
         litRevision = world.lightingRevision
-        multiplayerStatus = reason
-        statusText = reason
+        if let reason { errorMessage = reason }
         resetInput()
-        audio.setPaused(true)
+        syncAudioPause()
         updateTarget()
         refreshHUD()
     }
@@ -199,16 +171,15 @@ extension GameSession {
             state.localEntityID = id
             world = BlockWorld(seed: seed, dimension: dimension)
             entitySimulation = EntitySimulation(seed: seed, naturalSpawningEnabled: false)
-            multiplayerStatus = "Loading server terrain…"
-            statusText = multiplayerStatus
         case .spawnPosition(let position): spawn = position
         case .time(let time): worldTime = time
         case .health(let value):
-            player.setHealthFromServer(Int(value))
+            player.setHealthFromServer(Int(value), animate: state.receivedHealth)
+            state.receivedHealth = true
             if value <= 0 {
                 resetInput()
-                isPaused = true
-                statusText = "You died"
+                isPaused = false
+                showDeathScreen = true
             }
             refreshHUD()
         case .respawn(let dimension):
@@ -222,6 +193,8 @@ extension GameSession {
             player.localDamageEnabled = false
             state.receivedPosition = false
             state.respawnRequested = false
+            state.receivedHealth = false
+            showDeathScreen = false
             state.vehicleID = nil
             isLoading = true
             isPaused = false
@@ -311,11 +284,9 @@ extension GameSession {
             } else if reason == 2 {
                 state.raining = false
             } else if reason == 0 {
-                statusText = "You can only sleep at night"
+                postChat("Your home bed was missing or obstructed")
             }
-        case .chat(let text):
-            chatLines.append(text)
-            if chatLines.count > 50 { chatLines.removeFirst(chatLines.count - 50) }
+        case .chat(let text): postChat(text)
         case .updateSign(let position, let lines):
             world.setBlockEntity(.sign(lines: lines), at: position)
         case .disconnect(let reason): endMultiplayer(reason: reason)
@@ -343,8 +314,6 @@ extension GameSession {
         if isLoading {
             isLoading = false
             isPaused = false
-            multiplayerStatus = "Connected to Beta 1.7.3 server"
-            statusText = ""
             accumulator = 0
             audio.setPaused(false)
             updateTarget()
@@ -354,7 +323,17 @@ extension GameSession {
 
     func tickMultiplayer() {
         guard let state = multiplayer else { return }
-        let active = !inventoryOpen && !isPaused && !chatOpen && !signEditorOpen && sleepTicks == 0
+        audio.tick()
+        if miningPressed && tickCount - lastPrimaryTick >= 5 {
+            miningPressed = false
+            multiplayerPrimaryAction(isPressed: true)
+        }
+        if secondaryPressed && tickCount - lastSecondaryTick >= 5 {
+            multiplayerSecondaryAction()
+            lastSecondaryTick = tickCount
+        }
+        let active =
+            !inventoryOpen && !isPaused && !chatOpen && !signEditorOpen && sleepTicks == 0 && !showDeathScreen
         let forward = active ? axis(.forward, .backward) + touchMovement.y : 0
         let strafe = active ? axis(.right, .left) + touchMovement.x : 0
         entitySimulation.tickRemote()
@@ -376,7 +355,9 @@ extension GameSession {
                     input: PlayerInput(
                         forward: forward, strafe: strafe,
                         jump: active && pressed.contains(.jump), sneak: active && pressed.contains(.sneak)),
-                    yaw: camera.yaw, world: world)
+                    yaw: camera.yaw, world: world,
+                    entityCollisions: entitySimulation.collisionBoxes(
+                        intersecting: player.bounds.expanded(by: SIMD3(repeating: 1))))
             }
             sendMultiplayerMovement()
         }
@@ -391,7 +372,7 @@ extension GameSession {
             }
         }
         camera.setPosition(player.eyePosition)
-        if achievementNoticeTicks > 0 { achievementNoticeTicks -= 1 } else { achievementNotice = nil }
+        tickAchievementNotice()
         worldTime += 1
         tickCount += 1
         tickItemState()
@@ -437,8 +418,8 @@ extension GameSession {
     func respawnMultiplayer() {
         guard let state = multiplayer, !state.respawnRequested else { return }
         state.respawnRequested = true
+        showDeathScreen = false
         state.client?.send(.respawn(world.dimension))
         isPaused = false
-        statusText = "Respawning…"
     }
 }

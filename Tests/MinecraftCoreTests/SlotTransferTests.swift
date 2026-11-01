@@ -22,6 +22,6 @@ import Testing
     #expect(cursor?.count == 6)
     cursor?.damage = 5
     SlotTransfer.exchange(cursor: &cursor, slot: &slot, secondary: true)
-    #expect(slot?.damage == 4)
-    #expect(cursor?.count == 6)
+    #expect(slot?.damage == 5 && slot?.count == 6)
+    #expect(cursor?.damage == 4 && cursor?.count == 64)
 }

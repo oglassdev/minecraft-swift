@@ -1,21 +1,11 @@
 import Foundation
 
 public struct BlockSimulation: Sendable {
-    private struct TickKey: Hashable, Sendable {
-        let position: BlockPosition
-        let kind: BlockKind
-    }
-
-    private struct ScheduledTick: Sendable {
-        let key: TickKey
-        let time: Int64
-        let order: UInt64
-    }
-
     private var random: JavaRandom
-    private var updateLCG: Int32
-    private var pending: [TickKey: ScheduledTick] = [:]
-    private var nextOrder: UInt64 = 0
+    private var defaultTickState: WorldTickState
+    private var pending = ScheduledBlockTickQueue()
+    private var nextOrder: Int64 = 0
+    public var scheduledTicks: [ScheduledBlockTick] { pending.ordered }
     private var knownChunks: Set<ChunkPosition> = []
     private var currentTime: Int64 = 0
     private var weather: WorldWeather?
@@ -23,10 +13,30 @@ public struct BlockSimulation: Sendable {
     private var pressurePlates: Set<BlockPosition> = []
     private var torchBurnouts: [BlockPosition: [Int64]] = [:]
     private var knownRails: [BlockPosition: BlockKind] = [:]
+    private var containerRandoms: [BlockKind: JavaRandom] = [:]
+    private var wireUpdates = BlockPower.WireUpdates()
+
+    private enum NotificationContinuation: Sendable {
+        case wireHook(BlockPosition, stage: Int, removedMetadata: UInt8?)
+        case wireNearby(BlockPosition)
+        case wireCalculate(BlockPosition, previousMetadata: UInt8?)
+    }
+
+    private typealias Notifications = BlockNotificationStack<NotificationContinuation>
+
+    private static let randomTickKinds: [Bool] = {
+        var kinds = [Bool](repeating: false, count: 256)
+        for id in [
+            2, 6, 8, 10, 11, 18, 28, 31, 32, 37, 38, 39, 40, 50, 51, 59, 60, 70, 72, 74,
+            75, 76, 77, 78, 79, 80, 81, 83, 86, 91, 92, 95,
+        ] { kinds[id] = true }
+        return kinds
+    }()
 
     public init(seed: Int64) {
         random = JavaRandom(seed: seed)
-        updateLCG = random.nextInt()
+        let updateLCG = random.nextInt()
+        defaultTickState = WorldTickState(random: random, updateLCG: updateLCG, caveSoundCooldown: 12000)
     }
 
     public mutating func attack(
@@ -63,110 +73,295 @@ public struct BlockSimulation: Sendable {
         return events
     }
 
-    public mutating func containerDrops(_ tile: BlockEntity, at p: BlockPosition) -> [BlockEvent] {
-        BlockInteractions.containerDrops(tile, at: p, random: &random)
+    public mutating func containerDrops(_ tile: BlockEntity, at p: BlockPosition, kind: BlockKind? = nil)
+        -> [BlockEvent]
+    {
+        let block: BlockKind
+        switch tile {
+        case .chest: block = kind ?? .chest
+        case .furnace: block = kind ?? .furnace
+        case .dispenser: block = kind ?? .dispenser
+        default: return BlockInteractions.containerDrops(tile, at: p, random: &random)
+        }
+        var blockRandom = containerRandoms[block] ?? JavaRandom(seed: Int64.random(in: .min ... .max))
+        let events = BlockInteractions.containerDrops(tile, at: p, random: &blockRandom)
+        containerRandoms[block] = blockRandom
+        return events
     }
 
     @discardableResult
     public mutating func blockChanged(at p: BlockPosition, world: inout BlockWorld, time: Int64)
         -> [BlockEvent]
     {
+        var notifications = Notifications()
+        notifications.added(at: p, state: world.state(at: p))
+        return drainNotifications(&notifications, world: &world, time: time)
+    }
+
+    @discardableResult
+    public mutating func blockChanged(
+        at p: BlockPosition, previousState: BlockState?, metadataOnly: Bool = false,
+        world: inout BlockWorld, time: Int64
+    ) -> [BlockEvent] {
+        var notifications = Notifications()
+        if metadataOnly {
+            let state = world.state(at: p)
+            pushControlNotifications(at: p, state: state, onto: &notifications)
+            notifications.notify(at: p, changedKind: state?.kind ?? .air)
+        } else {
+            notifications.changed(at: p, previous: previousState, current: world.state(at: p))
+        }
+        return drainNotifications(&notifications, world: &world, time: time)
+    }
+
+    private mutating func drainNotifications(
+        _ notifications: inout Notifications, world: inout BlockWorld, time: Int64
+    ) -> [BlockEvent] {
         currentTime = time
         var events: [BlockEvent] = []
-        if world[p] == nil { markLeaves(near: p, world: &world) }
-        var queue = [p] + BlockPosition.neighbors.map { p.adding($0) }
-        var visited: Set<BlockPosition> = []
-        while let position = queue.popLast(), visited.count < 4096 {
-            guard visited.insert(position).inserted, let state = world.state(at: position) else { continue }
+        while let step = notifications.next() {
+            let position: BlockPosition
+            let state: BlockState
+            let neighbor: Bool
+            switch step {
+            case .continuation(let continuation):
+                continueNotification(continuation, notifications: &notifications, world: &world)
+                continue
+            case .removed(let p, let old):
+                knownRails.removeValue(forKey: p)
+                poweredDevices.remove(p)
+                pressurePlates.remove(p)
+                if old.kind == .redstoneWire {
+                    notifications.push(.wireHook(p, stage: 0, removedMetadata: old.metadata))
+                } else if old.kind == .redstoneTorch {
+                    pushTorchNotifications(at: p, onto: &notifications)
+                } else if old.metadata & 8 != 0 {
+                    pushControlNotifications(at: p, state: old, onto: &notifications)
+                    if old.kind == .lever || old.kind == .stoneButton {
+                        notifications.notify(at: p, changedKind: old.kind)
+                    }
+                }
+                continue
+            case .added(let p, let added):
+                position = p
+                state = BlockState(added.kind, metadata: world.state(at: p)?.metadata ?? added.metadata)
+                neighbor = false
+            case .neighbor(let p, _):
+                guard let current = world.state(at: p) else {
+                    knownRails.removeValue(forKey: p)
+                    poweredDevices.remove(p)
+                    pressurePlates.remove(p)
+                    continue
+                }
+                position = p
+                state = current
+                neighbor = true
+            }
             if state.kind == .fire && world[position.adding(BlockPosition(0, -1, 0))] == .obsidian {
                 let portal = PortalFormation.form(at: position, world: &world)
                 if !portal.isEmpty {
-                    queue += portal
+                    for changed in portal.reversed() {
+                        notifications.added(at: changed, state: world.state(at: changed))
+                    }
                     continue
                 }
             }
-            if position != p && state.kind == .farmland,
+            if neighbor && state.kind == .farmland,
                 world[position.adding(BlockPosition(0, 1, 0))]?.isMaterialSolid == true
             {
                 world[position] = .dirt
-                queue += BlockPosition.neighbors.map { position.adding($0) }
+                notifications.changed(at: position, previous: state, current: BlockState(.dirt))
                 continue
             }
             if !BlockPlacement.canRemain(state, at: position, in: world)
-                || (position != p && !BlockGrowth.hasRequiredLight(state, at: position, world: world))
+                || (neighbor && !BlockGrowth.hasRequiredLight(state, at: position, world: world))
             {
                 events += remove(at: position, world: &world)
-                queue += BlockPosition.neighbors.map { position.adding($0) }
+                notifications.changed(at: position, previous: state, current: nil)
+                continue
+            }
+            if state.kind == .redstoneWire {
+                if neighbor {
+                    notifications.push(.wireCalculate(position, previousMetadata: nil))
+                } else {
+                    notifications.push(.wireHook(position, stage: 0, removedMetadata: nil))
+                }
                 continue
             }
             if RailSimulation.isRail(state.kind), knownRails[position] != state.kind {
                 knownRails[position] = state.kind
-                queue += RailSimulation.updateTopology(at: position, world: &world, force: true)
+                for changed in RailSimulation.updateTopology(at: position, world: &world, force: true)
+                    .reversed()
+                {
+                    notifications.notify(at: changed, changedKind: world[changed] ?? .air)
+                }
             }
             if state.kind.isLiquid {
                 let mixed = FluidSimulation.mix(at: position, world: &world)
                 events += mixed.events
                 if !mixed.positions.isEmpty {
-                    queue += BlockPosition.neighbors.map { position.adding($0) }
+                    notifications.changed(at: position, previous: state, current: world.state(at: position))
                     continue
                 }
                 let flowing: BlockKind = BlockPlacement.isWater(state.kind) ? .water : .lava
-                if state.kind != flowing {
+                if state.kind != flowing && neighbor {
                     world.setBlock(BlockState(flowing, metadata: state.metadata), at: position)
                 }
-                schedule(position, kind: flowing, after: flowing == .water ? 5 : 30)
-            } else {
-                scheduleIfNeeded(position, state: state)
+                if world[position] == flowing {
+                    schedule(position, kind: flowing, after: flowing == .water ? 5 : 30, world: world)
+                }
+            } else if !neighbor || state.kind == .sand || state.kind == .gravel {
+                scheduleIfNeeded(position, state: state, world: world)
             }
             if world.blockEntity(at: position) == nil, let tile = BlockEntity.initial(for: state) {
                 world.setBlockEntity(tile, at: position)
             }
+            let power = updatePower(at: position, state: state, world: &world)
+            events += power.events
+            for changed in power.positions.reversed() {
+                notifications.added(at: changed, state: world.state(at: changed))
+            }
+            if !neighbor {
+                switch state.kind {
+                case .redstoneTorch: pushTorchNotifications(at: position, onto: &notifications)
+                case .repeaterOff, .repeaterOn:
+                    for offset in [
+                        BlockPosition(1, 0, 0), BlockPosition(-1, 0, 0),
+                        BlockPosition(0, 0, 1), BlockPosition(0, 0, -1),
+                        BlockPosition(0, -1, 0), BlockPosition(0, 1, 0),
+                    ].reversed() {
+                        notifications.notify(at: position.adding(offset), changedKind: state.kind)
+                    }
+                default: pushControlNotifications(at: position, state: state, onto: &notifications)
+                }
+            }
         }
-        let power = updatePower(around: [p] + Array(visited), world: &world)
-        events += power.events
-        for changed in power.positions { events += blockChanged(at: changed, world: &world, time: time) }
         return events
+    }
+
+    private mutating func continueNotification(
+        _ continuation: NotificationContinuation, notifications: inout Notifications,
+        world: inout BlockWorld
+    ) {
+        switch continuation {
+        case .wireCalculate(let p, let previousMetadata):
+            let result = wireUpdates.update(at: p, world: &world, previousMetadata: previousMetadata)
+            for origin in result.notifyOrigins.reversed() {
+                notifications.notify(at: origin, changedKind: .redstoneWire)
+            }
+        case .wireNearby(let p):
+            guard world[p] == .redstoneWire else { return }
+            for offset in [
+                BlockPosition(0, 0, 0), BlockPosition(-1, 0, 0), BlockPosition(1, 0, 0),
+                BlockPosition(0, 0, -1), BlockPosition(0, 0, 1),
+                BlockPosition(0, -1, 0), BlockPosition(0, 1, 0),
+            ].reversed() {
+                notifications.notify(at: p.adding(offset), changedKind: .redstoneWire)
+            }
+        case .wireHook(let p, let stage, let removedMetadata):
+            let removed = removedMetadata != nil
+            if stage < 11 {
+                notifications.push(.wireHook(p, stage: stage + 1, removedMetadata: removedMetadata))
+            }
+            switch stage {
+            case 0 where !removed, 2 where removed:
+                notifications.push(.wireCalculate(p, previousMetadata: removedMetadata))
+            case 0,
+                1 where !removed:
+                notifications.notify(at: p.adding(BlockPosition(0, 1, 0)), changedKind: .redstoneWire)
+            case 1, 2:
+                notifications.notify(at: p.adding(BlockPosition(0, -1, 0)), changedKind: .redstoneWire)
+            case 3...6:
+                notifications.push(.wireNearby(p.adding(Self.wireHorizontal[stage - 3])))
+            case 7...10:
+                let neighbor = p.adding(Self.wireHorizontal[stage - 7])
+                let y = world[neighbor]?.isNormalCube == true ? 1 : -1
+                notifications.push(.wireNearby(neighbor.adding(BlockPosition(0, y, 0))))
+            default: break
+            }
+        }
+    }
+
+    private static let wireHorizontal = [
+        BlockPosition(-1, 0, 0), BlockPosition(1, 0, 0),
+        BlockPosition(0, 0, -1), BlockPosition(0, 0, 1),
+    ]
+
+    private func pushTorchNotifications(at p: BlockPosition, onto notifications: inout Notifications) {
+        for offset in [
+            BlockPosition(0, -1, 0), BlockPosition(0, 1, 0),
+            BlockPosition(-1, 0, 0), BlockPosition(1, 0, 0),
+            BlockPosition(0, 0, -1), BlockPosition(0, 0, 1),
+        ].reversed() {
+            notifications.notify(at: p.adding(offset), changedKind: .redstoneTorch)
+        }
+    }
+
+    private func pushControlNotifications(
+        at p: BlockPosition, state: BlockState?, onto notifications: inout Notifications
+    ) {
+        guard let state else { return }
+        let offset: BlockPosition
+        switch state.kind {
+        case .lever, .stoneButton:
+            switch state.metadata & 7 {
+            case 1: offset = BlockPosition(-1, 0, 0)
+            case 2: offset = BlockPosition(1, 0, 0)
+            case 3: offset = BlockPosition(0, 0, -1)
+            case 4: offset = BlockPosition(0, 0, 1)
+            default: offset = BlockPosition(0, -1, 0)
+            }
+        case .stonePressurePlate, .woodenPressurePlate, .detectorRail:
+            offset = BlockPosition(0, -1, 0)
+        default: return
+        }
+        notifications.notify(at: p.adding(offset), changedKind: state.kind)
     }
 
     public mutating func tick(
         world: inout BlockWorld, players: [SIMD3<Double>], time: Int64, entities: [GameEntity] = [],
         weather: WorldWeather? = nil
     ) -> [BlockEvent] {
+        var tickState = defaultTickState
+        tickState.random = random
+        var weather = weather ?? WorldWeather(seed: world.seed)
+        let events = tick(
+            world: &world, players: players, time: time, entities: entities, weather: &weather,
+            tickState: &tickState)
+        defaultTickState = tickState
+        random = tickState.random
+        return events
+    }
+
+    public mutating func withWorldRandom<Result>(
+        _ worldRandom: inout JavaRandom, _ operation: (inout BlockSimulation) throws -> Result
+    ) rethrows -> Result {
+        swap(&random, &worldRandom)
+        defer { swap(&random, &worldRandom) }
+        return try operation(&self)
+    }
+
+    public mutating func tick(
+        world: inout BlockWorld, players: [SIMD3<Double>], time: Int64, entities: [GameEntity] = [],
+        weather: inout WorldWeather, tickState: inout WorldTickState, includeBlockEntities: Bool = true
+    ) -> [BlockEvent] {
+        let savedRandom = random
+        random = tickState.random
+        defer {
+            tickState.random = random
+            random = savedRandom
+        }
         currentTime = time
         self.weather = weather
         var events: [BlockEvent] = []
         discoverChunks(world: &world)
-        for p in pressurePlates {
-            guard let state = world.state(at: p),
-                [.stonePressurePlate, .woodenPressurePlate, .detectorRail].contains(state.kind)
-            else {
-                pressurePlates.remove(p)
-                continue
-            }
-            let occupied = state.kind == .detectorRail ? state.metadata & 8 != 0 : state.metadata != 0
-            if !occupied {
-                let changes = sensePressurePlate(
-                    at: p, state: state, world: &world, players: players, entities: entities)
-                events += changes.events
-                for changed in changes.positions {
-                    events += blockChanged(at: changed, world: &world, time: time)
-                }
-            }
-        }
-        let due = pending.values.filter { $0.time <= time }.sorted {
-            $0.time == $1.time ? $0.order < $1.order : $0.time < $1.time
-        }.prefix(1000)
-        for tick in due {
-            pending.removeValue(forKey: tick.key)
-            let p = tick.key.position
-            let loaded = (((p.x - 8) >> 4)...((p.x + 8) >> 4)).allSatisfy { x in
-                (((p.z - 8) >> 4)...((p.z + 8) >> 4)).allSatisfy { z in
-                    world.chunks[ChunkPosition(x, z)] != nil
-                }
-            }
-            guard loaded else { continue }
-            guard let state = world.state(at: p), state.kind == tick.key.kind else { continue }
+        var cycle = pending.beginCycle()
+        while let tick = cycle.next(in: &pending, through: time) {
+            let p = tick.position
+            guard Self.scheduledAreaLoaded(at: p, world: world) else { continue }
+            guard let state = world.state(at: p), state.kind == tick.kind else { continue }
             var changes = BlockGrowth.Changes()
+            var pulseDelay: Int64?
             switch state.kind {
             case .water, .lava: changes = FluidSimulation.tick(at: p, world: &world, random: &random)
             case .sand, .gravel: changes = falling(at: p, state: state, world: &world)
@@ -179,28 +374,41 @@ public struct BlockSimulation: Sendable {
                 world[p] = .redstoneOre
                 changes.positions = [p]
             case .redstoneTorch, .redstoneTorchOff, .repeaterOff, .repeaterOn:
+                if state.kind == .repeaterOff && !BlockPower.repeaterInput(at: p, state: state, world: world)
+                {
+                    pulseDelay = Int64(((state.metadata & 12) >> 2) + 1) * 2
+                }
                 changes = powerTick(at: p, state: state, world: &world)
             case .dispenser: changes.events = dispense(at: p, world: &world)
             default: break
             }
             events += changes.events
             for changed in changes.positions {
+                if changed == p {
+                    events += blockChanged(at: changed, previousState: state, world: &world, time: time)
+                } else {
+                    events += blockChanged(at: changed, world: &world, time: time)
+                }
+            }
+            if let pulseDelay { schedule(p, kind: .repeaterOn, after: pulseDelay, world: world) }
+        }
+        tickState.prepareActiveChunks(players: players)
+        for chunk in tickState.activeChunks where world.chunks[chunk] != nil {
+            let environment = weather.tickChunk(
+                chunk, world: &world, players: players, tickState: &tickState, random: &random)
+            events += environment.events
+            for changed in environment.positions {
                 events += blockChanged(at: changed, world: &world, time: time)
             }
-        }
-        for chunk in world.chunks.keys.sorted(by: { $0.x == $1.x ? $0.z < $1.z : $0.x < $1.x }) {
-            let active =
-                players.isEmpty
-                || players.contains {
-                    abs(Int(floor($0.x / 16)) - chunk.x) <= 9 && abs(Int(floor($0.z / 16)) - chunk.z) <= 9
-                }
-            guard active else { continue }
+            // Dropped before each tick so block edits never copy the chunk's storage.
+            var blockIDs: [UInt8]?
             for _ in 0..<80 {
-                updateLCG = updateLCG &* 3 &+ 1_013_904_223
-                let bits = updateLCG >> 2
-                let p = BlockPosition(
-                    chunk.x * 16 + Int(bits & 15), Int((bits >> 16) & 127),
-                    chunk.z * 16 + Int((bits >> 8) & 15))
+                let p = tickState.nextPosition(in: chunk)
+                if blockIDs == nil { blockIDs = world.chunks[chunk]?.blockIDs }
+                guard let id = blockIDs?[Chunk.index(x: p.x & 15, y: p.y, z: p.z & 15)],
+                    Self.randomTickKinds[Int(id)]
+                else { continue }
+                blockIDs = nil
                 guard let state = world.state(at: p) else { continue }
                 let changes: BlockGrowth.Changes
                 switch state.kind {
@@ -219,10 +427,46 @@ public struct BlockSimulation: Sendable {
                         : .init()
                 case .stoneButton:
                     changes = releaseButton(at: p, state: state, world: &world)
+                case .litRedstoneOre:
+                    world[p] = .redstoneOre
+                    changes = .init(positions: [p])
                 default:
                     changes = BlockGrowth.randomTick(
                         at: p, world: &world, random: &random, time: time, weather: weather)
                 }
+                events += changes.events
+                for changed in changes.positions {
+                    if changed == p {
+                        events += blockChanged(at: changed, previousState: state, world: &world, time: time)
+                    } else {
+                        events += blockChanged(at: changed, world: &world, time: time)
+                    }
+                }
+            }
+        }
+        if includeBlockEntities {
+            events += tickBlockEntities(world: &world, players: players, entities: entities, time: time)
+        }
+        return events
+    }
+
+    public mutating func tickBlockEntities(
+        world: inout BlockWorld, players: [SIMD3<Double>], entities: [GameEntity] = [], time: Int64
+    ) -> [BlockEvent] {
+        currentTime = time
+        discoverChunks(world: &world)
+        var events: [BlockEvent] = []
+        for p in pressurePlates {
+            guard let state = world.state(at: p),
+                [.stonePressurePlate, .woodenPressurePlate, .detectorRail].contains(state.kind)
+            else {
+                pressurePlates.remove(p)
+                continue
+            }
+            let occupied = state.kind == .detectorRail ? state.metadata & 8 != 0 : state.metadata != 0
+            if !occupied {
+                let changes = sensePressurePlate(
+                    at: p, state: state, world: &world, players: players, entities: entities)
                 events += changes.events
                 for changed in changes.positions {
                     events += blockChanged(at: changed, world: &world, time: time)
@@ -315,31 +559,49 @@ public struct BlockSimulation: Sendable {
             world.setBlock(BlockState(state.kind, metadata: metadata), at: p)
             changes.positions = [p]
         }
-        if occupied { schedule(p, kind: state.kind, after: 20) }
+        if occupied { schedule(p, kind: state.kind, after: 20, world: world) }
         return changes
     }
 
-    private mutating func schedule(_ p: BlockPosition, kind: BlockKind, after delay: Int64) {
-        let key = TickKey(position: p, kind: kind)
-        guard pending[key] == nil else { return }
-        pending[key] = ScheduledTick(key: key, time: currentTime + delay, order: nextOrder)
-        nextOrder &+= 1
+    public mutating func scheduleUpdate(
+        at position: BlockPosition, kind: BlockKind, after delay: Int64, world: BlockWorld, time: Int64
+    ) {
+        currentTime = time
+        schedule(position, kind: kind, after: delay, world: world)
     }
 
-    private mutating func scheduleIfNeeded(_ p: BlockPosition, state: BlockState) {
-        switch state.kind {
-        case .water: schedule(p, kind: state.kind, after: 5)
-        case .lava: schedule(p, kind: state.kind, after: 30)
-        case .sand, .gravel: schedule(p, kind: state.kind, after: 3)
-        case .fire: schedule(p, kind: state.kind, after: 40)
-        case .stonePressurePlate,
-            .woodenPressurePlate where state.metadata != 0:
-            schedule(p, kind: state.kind, after: 20)
-        case .detectorRail where state.metadata & 8 != 0: schedule(p, kind: state.kind, after: 20)
-        case .stoneButton where state.metadata & 8 != 0: schedule(p, kind: state.kind, after: 20)
-        case .litRedstoneOre: schedule(p, kind: state.kind, after: 30)
-        default: break
+    private mutating func schedule(_ p: BlockPosition, kind: BlockKind, after delay: Int64, world: BlockWorld)
+    {
+        let tick = ScheduledBlockTick(
+            position: p, kind: kind,
+            time: kind == .air ? 0 : currentTime &+ delay, order: nextOrder)
+        nextOrder &+= 1
+        guard Self.scheduledAreaLoaded(at: p, world: world) else { return }
+        pending.insert(tick)
+    }
+
+    private static func scheduledAreaLoaded(at p: BlockPosition, world: BlockWorld) -> Bool {
+        guard p.y + 8 >= 0, p.y - 8 < 128 else { return false }
+        return (((p.x - 8) >> 4)...((p.x + 8) >> 4)).allSatisfy { x in
+            (((p.z - 8) >> 4)...((p.z + 8) >> 4)).allSatisfy { z in world.chunks[ChunkPosition(x, z)] != nil }
         }
+    }
+
+    private mutating func scheduleIfNeeded(_ p: BlockPosition, state: BlockState, world: BlockWorld) {
+        let delay: Int64
+        switch state.kind {
+        case .water: delay = 5
+        case .lava, .litRedstoneOre: delay = 30
+        case .sand, .gravel: delay = 3
+        case .fire: delay = 40
+        case .stonePressurePlate, .woodenPressurePlate:
+            guard state.metadata != 0 else { return }
+            delay = 20
+        case .detectorRail where state.metadata & 8 != 0: delay = 20
+        case .stoneButton where state.metadata & 8 != 0: delay = 20
+        default: return
+        }
+        schedule(p, kind: state.kind, after: delay, world: world)
     }
 
     private mutating func discoverChunks(world: inout BlockWorld) {
@@ -363,101 +625,76 @@ public struct BlockSimulation: Sendable {
         }
     }
 
-    private mutating func updatePower(around positions: [BlockPosition], world: inout BlockWorld)
-        -> BlockGrowth.Changes
-    {
+    private mutating func updatePower(
+        at p: BlockPosition, state: BlockState, world: inout BlockWorld
+    ) -> BlockGrowth.Changes {
         var result = BlockGrowth.Changes()
-        var nearby: Set<BlockPosition> = []
-        for p in positions {
-            for x in -1...1 {
-                for y in -2...2 {
-                    for z in -1...1 { nearby.insert(p.adding(BlockPosition(x, y, z))) }
-                }
-            }
+        if state.kind == .poweredRail {
+            result.positions += RailSimulation.recalculatePower(around: [p], world: &world)
         }
-        let wires = BlockPower.recalculateWires(
-            around: nearby.filter { world[$0] == .redstoneWire }, world: &world)
-        result.positions += wires
-        for wire in wires {
-            nearby.insert(wire)
-            for offset in BlockPosition.neighbors { nearby.insert(wire.adding(offset)) }
-        }
-        result.positions += RailSimulation.recalculatePower(
-            around: nearby.filter { world[$0] == .poweredRail }, world: &world)
-        for p in nearby.sorted(by: { a, b in
-            if a.x != b.x { return a.x < b.x }
-            if a.y != b.y { return a.y < b.y }
-            return a.z < b.z
-        }) {
-            guard let state = world.state(at: p) else {
-                knownRails.removeValue(forKey: p)
-                poweredDevices.remove(p)
-                continue
+        switch state.kind {
+        case .rail:
+            if RailSimulation.neighborCount(at: p, world: world) == 3 {
+                result.positions += RailSimulation.updateTopology(at: p, world: &world, force: false)
             }
-            switch state.kind {
-            case .rail:
-                if RailSimulation.neighborCount(at: p, world: world) == 3 {
-                    result.positions += RailSimulation.updateTopology(at: p, world: &world, force: false)
-                }
-            case .redstoneTorch, .redstoneTorchOff:
-                let input = BlockPower.torchInput(at: p, state: state, world: world)
-                if input == (state.kind == .redstoneTorch) { schedule(p, kind: state.kind, after: 2) }
-            case .repeaterOff, .repeaterOn:
-                let input = BlockPower.repeaterInput(at: p, state: state, world: world)
-                if input != (state.kind == .repeaterOn) {
-                    schedule(p, kind: state.kind, after: Int64(((state.metadata & 12) >> 2) + 1) * 2)
-                }
-            case .piston, .stickyPiston:
-                let piston = PistonSimulation.update(at: p, world: &world, random: &random)
-                result.positions += piston.positions
-                result.events += piston.events
-            case .woodenDoor, .ironDoor, .trapdoor:
-                let lower =
-                    state.kind != .trapdoor && state.metadata & 8 != 0 ? p.adding(BlockPosition(0, -1, 0)) : p
-                let powered =
-                    BlockPower.isPowered(at: lower, in: world)
-                    || (state.kind != .trapdoor
-                        && BlockPower.isPowered(at: lower.adding(BlockPosition(0, 1, 0)), in: world))
-                if powered != poweredDevices.contains(lower), let bottom = world.state(at: lower) {
-                    let data = powered ? bottom.metadata | 4 : bottom.metadata & ~4
-                    world.setBlock(BlockState(bottom.kind, metadata: data), at: lower)
-                    result.positions.append(lower)
-                    if bottom.kind != .trapdoor {
-                        let upper = lower.adding(BlockPosition(0, 1, 0))
-                        if world[upper] == bottom.kind {
-                            world.setBlock(BlockState(bottom.kind, metadata: data | 8), at: upper)
-                            result.positions.append(upper)
-                        }
-                    }
-                    result.events.append(BlockInteractions.sound("random.door_open", at: lower))
-                }
-                if powered { poweredDevices.insert(lower) } else { poweredDevices.remove(lower) }
-            case .dispenser, .noteBlock:
-                let powered =
-                    BlockPower.isPowered(at: p, in: world)
-                    || (state.kind == .dispenser
-                        && BlockPower.isPowered(at: p.adding(BlockPosition(0, 1, 0)), in: world))
-                if powered && !poweredDevices.contains(p) {
-                    if state.kind == .dispenser {
-                        schedule(p, kind: .dispenser, after: 4)
-                    } else if case .note(let pitch) = world.blockEntity(at: p),
-                        world[p.adding(BlockPosition(0, 1, 0))] == nil
-                    {
-                        result.events.append(BlockInteractions.noteSound(at: p, pitch: pitch, world: world))
+        case .redstoneTorch, .redstoneTorchOff:
+            schedule(p, kind: state.kind, after: 2, world: world)
+        case .repeaterOff, .repeaterOn:
+            let input = BlockPower.repeaterInput(at: p, state: state, world: world)
+            if input != (state.kind == .repeaterOn) {
+                schedule(
+                    p, kind: state.kind, after: Int64(((state.metadata & 12) >> 2) + 1) * 2, world: world)
+            }
+        case .piston, .stickyPiston:
+            let piston = PistonSimulation.update(at: p, world: &world, random: &random)
+            result.positions += piston.positions
+            result.events += piston.events
+        case .woodenDoor, .ironDoor, .trapdoor:
+            let lower =
+                state.kind != .trapdoor && state.metadata & 8 != 0 ? p.adding(BlockPosition(0, -1, 0)) : p
+            let powered =
+                BlockPower.isPowered(at: lower, in: world)
+                || (state.kind != .trapdoor
+                    && BlockPower.isPowered(at: lower.adding(BlockPosition(0, 1, 0)), in: world))
+            if powered != poweredDevices.contains(lower), let bottom = world.state(at: lower) {
+                let data = powered ? bottom.metadata | 4 : bottom.metadata & ~4
+                world.setBlock(BlockState(bottom.kind, metadata: data), at: lower)
+                result.positions.append(lower)
+                if bottom.kind != .trapdoor {
+                    let upper = lower.adding(BlockPosition(0, 1, 0))
+                    if world[upper] == bottom.kind {
+                        world.setBlock(BlockState(bottom.kind, metadata: data | 8), at: upper)
+                        result.positions.append(upper)
                     }
                 }
-                if powered { poweredDevices.insert(p) } else { poweredDevices.remove(p) }
-            case .tnt:
-                if BlockPower.isPowered(at: p, in: world) {
-                    world.setBlock(nil, at: p)
-                    result.positions.append(p)
-                    result.events.append(
-                        .spawnEntity(
-                            kind: "PrimedTnt", position: p.center - SIMD3(0, Double(Float(0.98)) / 2, 0)))
-                }
-            case .stonePressurePlate, .woodenPressurePlate, .detectorRail: pressurePlates.insert(p)
-            default: break
+                result.events.append(BlockInteractions.sound("random.door_open", at: lower))
             }
+            if powered { poweredDevices.insert(lower) } else { poweredDevices.remove(lower) }
+        case .dispenser, .noteBlock:
+            let powered =
+                BlockPower.isPowered(at: p, in: world)
+                || (state.kind == .dispenser
+                    && BlockPower.isPowered(at: p.adding(BlockPosition(0, 1, 0)), in: world))
+            if powered && !poweredDevices.contains(p) {
+                if state.kind == .dispenser {
+                    schedule(p, kind: .dispenser, after: 4, world: world)
+                } else if case .note(let pitch) = world.blockEntity(at: p),
+                    world[p.adding(BlockPosition(0, 1, 0))] == nil
+                {
+                    result.events.append(BlockInteractions.noteSound(at: p, pitch: pitch, world: world))
+                }
+            }
+            if powered { poweredDevices.insert(p) } else { poweredDevices.remove(p) }
+        case .tnt:
+            if BlockPower.isPowered(at: p, in: world) {
+                world.setBlock(nil, at: p)
+                result.positions.append(p)
+                result.events.append(
+                    .spawnEntity(
+                        kind: "PrimedTnt", position: p.center - SIMD3(0, Double(Float(0.98)) / 2, 0)))
+            }
+        case .stonePressurePlate, .woodenPressurePlate, .detectorRail: pressurePlates.insert(p)
+        default: break
         }
         return result
     }
@@ -549,24 +786,11 @@ public struct BlockSimulation: Sendable {
     private mutating func remove(at p: BlockPosition, world: inout BlockWorld) -> [BlockEvent] {
         guard let state = world.state(at: p) else { return [] }
         var events: [BlockEvent] = []
-        if let tile = world.blockEntity(at: p) { events += containerDrops(tile, at: p) }
-        let drops = BlockMining.explosionDrops(for: state, roll: { random.nextInt(bound: $0) })
-        events += drops.map { .dropItem(position: p.center, stack: $0) }
+        if let tile = world.blockEntity(at: p) { events += containerDrops(tile, at: p, kind: state.kind) }
+        events += BlockDrops.destroy(state, at: p, random: &random)
         world.setBlock(nil, at: p)
+        _ = BlockInteractions.didRemove(state, at: p, world: &world)
         return events
-    }
-
-    private mutating func markLeaves(near p: BlockPosition, world: inout BlockWorld) {
-        for x in -4...4 {
-            for y in -4...4 {
-                for z in -4...4 {
-                    let target = p.adding(BlockPosition(x, y, z))
-                    if let state = world.state(at: target), state.kind == .leaves && state.metadata & 8 == 0 {
-                        world.setBlock(BlockState(.leaves, metadata: state.metadata | 8), at: target)
-                    }
-                }
-            }
-        }
     }
 
     private func falling(at p: BlockPosition, state: BlockState, world: inout BlockWorld)

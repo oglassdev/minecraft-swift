@@ -10,10 +10,22 @@ public struct SavedPlayer: Sendable {
     public var inventory: PlayerInventory
     public var dimension: Int8
     public var bedSpawn: BlockPosition?
+    public var air: Int
+    public var fireTicks: Int
+    public var fallDistance: Float
+    public var onGround: Bool
+    public var hurtTicks: Int
+    public var deathTicks: Int
+    public var attackTicks: Int
+    public var sleeping: Bool
+    public var sleepTicks: Int
 
     public init(
         position: SIMD3<Double>, velocity: SIMD3<Double>, yaw: Float, pitch: Float,
-        health: Int, inventory: PlayerInventory, dimension: Int8 = 0, bedSpawn: BlockPosition? = nil
+        health: Int, inventory: PlayerInventory, dimension: Int8 = 0, bedSpawn: BlockPosition? = nil,
+        air: Int = 300, fireTicks: Int = 0, fallDistance: Float = 0, onGround: Bool = false,
+        hurtTicks: Int = 0, deathTicks: Int = 0, attackTicks: Int = 0,
+        sleeping: Bool = false, sleepTicks: Int = 0
     ) {
         self.position = position
         self.velocity = velocity
@@ -23,6 +35,15 @@ public struct SavedPlayer: Sendable {
         self.inventory = inventory
         self.dimension = dimension
         self.bedSpawn = bedSpawn
+        self.air = air
+        self.fireTicks = fireTicks
+        self.fallDistance = fallDistance
+        self.onGround = onGround
+        self.hurtTicks = hurtTicks
+        self.deathTicks = deathTicks
+        self.attackTicks = attackTicks
+        self.sleeping = sleeping
+        self.sleepTicks = sleepTicks
     }
 }
 
@@ -83,7 +104,7 @@ public final class WorldStorage {
                 let spawn = BlockPosition(
                     Int(data["SpawnX"]?.integerValue ?? 0),
                     Int(data["SpawnY"]?.integerValue ?? 64), Int(data["SpawnZ"]?.integerValue ?? 0))
-                let player = try decodePlayer(data["Player"]?.compoundValue ?? [:], spawn: spawn)
+                let player = try decodePlayer(data["Player"]?.compoundValue, spawn: spawn)
                 levelDocument = document
                 levelSourceData = source
                 let counter = max(1, min(Int64.max - 1, data["SwiftNextEntityID"]?.integerValue ?? 1))
@@ -199,11 +220,14 @@ public final class WorldStorage {
                 .appendingPathComponent("r.\(position.x >> 5).\(position.z >> 5).mcr"))
     }
 
-    private func decodePlayer(_ tags: [String: NBTTag], spawn: BlockPosition) throws -> SavedPlayer {
+    private func decodePlayer(_ savedTags: [String: NBTTag]?, spawn: BlockPosition) throws -> SavedPlayer {
+        let tags = savedTags ?? [:]
+        let sleeping = (tags["Sleeping"]?.integerValue ?? 0) != 0
+        let eyeOffset = sleeping ? Double(Float(0.2)) : Self.eyeOffset
         let fallback = SIMD3(Double(spawn.x) + 0.5, Double(spawn.y), Double(spawn.z) + 0.5)
         let position =
-            try vector(tags["Pos"], fallback: fallback + SIMD3(0, Self.eyeOffset, 0))
-            - SIMD3(0, Self.eyeOffset, 0)
+            try vector(tags["Pos"], fallback: fallback + SIMD3(0, eyeOffset, 0))
+            - SIMD3(0, eyeOffset, 0)
         var velocity = try vector(tags["Motion"], fallback: .zero)
         for axis in 0..<3 where abs(velocity[axis]) > 10 { velocity[axis] = 0 }
         let angles = tags["Rotation"]?.listValue?.compactMap(\.doubleValue) ?? [180, 0]
@@ -226,15 +250,28 @@ public final class WorldStorage {
         return SavedPlayer(
             position: position, velocity: velocity,
             yaw: Float((angles[0] - 180) * .pi / 180), pitch: Float(-angles[1] * .pi / 180),
-            health: Int(tags["Health"]?.integerValue ?? 20), inventory: inventory,
-            dimension: Int8(truncatingIfNeeded: tags["Dimension"]?.integerValue ?? 0), bedSpawn: bedSpawn)
+            health: Int(tags["Health"]?.integerValue ?? (savedTags == nil ? 20 : 10)), inventory: inventory,
+            dimension: Int8(truncatingIfNeeded: tags["Dimension"]?.integerValue ?? 0), bedSpawn: bedSpawn,
+            air: Int(tags["Air"]?.integerValue ?? (savedTags == nil ? 300 : 0)),
+            fireTicks: Int(tags["Fire"]?.integerValue ?? 0),
+            fallDistance: Float(tags["FallDistance"]?.doubleValue ?? 0),
+            onGround: (tags["OnGround"]?.integerValue ?? 0) != 0,
+            hurtTicks: Int(tags["HurtTime"]?.integerValue ?? 0),
+            deathTicks: Int(tags["DeathTime"]?.integerValue ?? 0),
+            attackTicks: Int(tags["AttackTime"]?.integerValue ?? 0),
+            sleeping: sleeping,
+            sleepTicks: Int(tags["SleepTimer"]?.integerValue ?? 0))
     }
 
     private func encodePlayer(_ player: SavedPlayer, previous: [String: NBTTag]) throws -> [String: NBTTag] {
         var tags = previous
         tags["Pos"] = .list(
             .double,
-            [player.position.x, player.position.y + Self.eyeOffset, player.position.z].map(NBTTag.double))
+            [
+                player.position.x,
+                player.position.y + (player.sleeping ? Double(Float(0.2)) : Self.eyeOffset),
+                player.position.z,
+            ].map(NBTTag.double))
         tags["Motion"] = .list(
             .double, [player.velocity.x, player.velocity.y, player.velocity.z].map(NBTTag.double))
         tags["Rotation"] = .list(
@@ -247,11 +284,15 @@ public final class WorldStorage {
         tags["Inventory"] = InventoryNBT.encodePlayer(
             player.inventory, previous: tags["Inventory"]?.listValue ?? [])
         tags["SelectedItemSlot"] = .int(Int32(clamping: player.inventory.selectedHotbar))
-        let defaults: [String: NBTTag] = [
-            "Air": .short(300), "Fire": .short(0), "FallDistance": .float(0),
-            "OnGround": .byte(0),
-        ]
-        for (key, value) in defaults where tags[key] == nil { tags[key] = value }
+        tags["Air"] = .short(Int16(truncatingIfNeeded: player.air))
+        tags["Fire"] = .short(Int16(truncatingIfNeeded: player.fireTicks))
+        tags["FallDistance"] = .float(player.fallDistance)
+        tags["OnGround"] = .byte(player.onGround ? 1 : 0)
+        tags["HurtTime"] = .short(Int16(truncatingIfNeeded: player.hurtTicks))
+        tags["DeathTime"] = .short(Int16(truncatingIfNeeded: player.deathTicks))
+        tags["AttackTime"] = .short(Int16(truncatingIfNeeded: player.attackTicks))
+        tags["Sleeping"] = .byte(player.sleeping ? 1 : 0)
+        tags["SleepTimer"] = .short(Int16(truncatingIfNeeded: player.sleepTicks))
         return tags
     }
 

@@ -60,6 +60,7 @@ import Testing
             ItemStack(id: 353), ItemStack(id: 344), ItemStack(id: 353),
             ItemStack(id: 296), ItemStack(id: 296), ItemStack(id: 296),
         ]
+        grid.slots[0]?.count = 2
         #expect(grid.craft() == ItemStack(id: 354))
         #expect(Array(grid.slots[0..<3]) == Array(repeating: ItemStack(id: 325), count: 3))
         grid.slots = Array(repeating: nil, count: 9)
@@ -102,4 +103,20 @@ import Testing
                 ItemStack(id: 18, damage: 2)
             ])
     }
+    @Test func damagedPickupsPreserveAnEntireStackAndZeroCountCraftsUnlockAchievements() {
+        var inventory = PlayerInventory()
+        inventory.slots[0] = ItemStack(id: 257, damage: 1)
+        let unusualStack = ItemStack(id: 257, count: 2, damage: 1)
+        let leftover = inventory.insert(unusualStack)
+        #expect(leftover == nil)
+        #expect(inventory.slots[0]?.count == 1 && inventory.slots[1] == unusualStack)
+        var statistics = PlayerStatistics()
+        statistics.recordInventoryOpen()
+        statistics.recordPickup(ItemStack(id: 17))
+        statistics.recordCraft(ItemStack(id: 58))
+        statistics.recordCraft(ItemStack(id: 270, count: 0))
+        #expect(statistics.value(for: StatisticRegistry.craft(itemID: 270)!.id) == 0)
+        #expect(statistics.value(for: Achievements.timeToMine) == 1)
+    }
+
 }

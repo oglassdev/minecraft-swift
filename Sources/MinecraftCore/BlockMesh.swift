@@ -1,6 +1,6 @@
 import Foundation
 
-public struct BlockVertex: Sendable {
+public struct BlockVertex: Sendable, BitwiseCopyable {
     public let position: SIMD3<Float>
     private let red: Float
     private let green: Float
@@ -74,6 +74,15 @@ public enum BlockFace: Int, CaseIterable, Sendable {
 
 /// Indices address the original 16-by-16 Beta terrain atlas.
 public enum BlockAtlas {
+    public static func inventoryTextureIndex(for state: BlockState, face: BlockFace) -> Int {
+        switch state.kind.rawValue {
+        case 2: return 3
+        case 23, 61, 62:
+            if face == .top || face == .bottom { return 62 }
+            return face == .south ? (state.kind == .dispenser ? 46 : 44) : 45
+        default: return textureIndex(for: state, face: face)
+        }
+    }
     public static func textureIndex(for state: BlockState, face: BlockFace) -> Int {
         let id = Int(state.kind.rawValue)
         let metadata = Int(state.metadata)
@@ -254,10 +263,12 @@ public struct TranslucentBlockFace: Sendable {
 public struct BlockMeshOptions: Equatable, Sendable {
     public var smoothLighting: Bool
     public var fancyLeaves: Bool
+    public var inventory: Bool
 
-    public init(smoothLighting: Bool = true, fancyLeaves: Bool = true) {
+    public init(smoothLighting: Bool = true, fancyLeaves: Bool = true, inventory: Bool = false) {
         self.smoothLighting = smoothLighting
         self.fancyLeaves = fancyLeaves
+        self.inventory = inventory
     }
 }
 
@@ -335,6 +346,10 @@ private struct MeshBuilder {
 
     mutating func append(position: BlockPosition, state: BlockState) {
         let id = state.kind.rawValue
+        if options.inventory, id == 29 || id == 33, state.metadata != 1 {
+            append(position: position, state: BlockState(state.kind, metadata: 1))
+            return
+        }
         guard id != 0 && id != 36 && id != 63 && id != 68 else { return }
         if state.kind.isLiquid {
             appendLiquid(position: position, state: state)
@@ -491,9 +506,11 @@ private struct MeshBuilder {
 
     private func tint(position: BlockPosition, state: BlockState, face: BlockFace) -> SIMD3<Float> {
         let id = state.kind.rawValue
+        if options.inventory && id == 2 { return SIMD3(repeating: 1) }
         if id == 18 {
-            if state.metadata & 1 != 0 { return BlockColorMaps.rgb(6_396_257) }
-            if state.metadata & 2 != 0 { return BlockColorMaps.rgb(8_431_445) }
+            if state.metadata & 3 == 1 { return BlockColorMaps.rgb(6_396_257) }
+            if state.metadata & 3 == 2 { return BlockColorMaps.rgb(8_431_445) }
+            if options.inventory { return BlockColorMaps.rgb(4_764_952) }
         }
         let grass = id == 2 && face == .top || id == 31 && state.metadata != 0
         guard grass || id == 18 else { return SIMD3(repeating: 1) }
@@ -566,39 +583,44 @@ private struct MeshBuilder {
     ]
 
     private mutating func appendBox(position: BlockPosition, state: BlockState, bounds: MeshBounds) {
+        let smooth =
+            options.smoothLighting && state.kind.lightEmission == 0
+            && ![26, 29, 33, 34, 50, 63, 64, 68, 71, 75, 76, 81].contains(state.kind.rawValue)
+        let blockOffset = vector(position)
+        let extent = bounds.maximum - bounds.minimum
         for face in BlockFace.allCases {
             if bounds.touchesBoundary(face) && isOccluded(position: position, state: state, face: face) {
                 continue
             }
-            let points = face.corners.map { bounds.minimum + $0 * (bounds.maximum - bounds.minimum) }
-            let smooth =
-                options.smoothLighting && state.kind.lightEmission == 0
-                && ![26, 29, 33, 34, 50, 63, 64, 68, 71, 75, 76, 81].contains(state.kind.rawValue)
+            let corners = face.corners
+            let points = corners.map { bounds.minimum + $0 * extent }
             let lightSamples =
                 smooth
-                ? face.corners.map { ambientLight(position: position, state: state, face: face, corner: $0) }
+                ? corners.map { ambientLight(position: position, state: state, face: face, corner: $0) }
                 : nil
             var uv = points.map(face.textureCoordinates)
             if BlockAtlas.mirrorsTexture(for: state, face: face) { uv = uv.map { SIMD2(1 - $0.x, $0.y) } }
-            var tile = BlockAtlas.textureIndex(for: state, face: face, at: position, in: world)
+            var tile =
+                options.inventory
+                ? BlockAtlas.inventoryTextureIndex(for: state, face: face)
+                : BlockAtlas.textureIndex(for: state, face: face, at: position, in: world)
             if state.kind == .leaves && !options.fancyLeaves { tile += 1 }
             if state.kind == .grass && face != .top && face != .bottom {
                 if world[BlockPosition(position.x, position.y + 1, position.z)] == .snowLayer { tile = 68 }
             }
             appendQuad(
-                points: points.map { $0 + vector(position) }, uv: uv,
+                points: points.map { $0 + blockOffset }, uv: uv,
                 tile: tile, color: tint(position: position, state: state, face: face) * face.brightness,
                 layer: layer(for: state.kind), light: light(position: position, state: state, face: face),
                 lightSamples: lightSamples)
-            if state.kind == .grass && face != .top && face != .bottom && tile == 3 {
+            if !options.inventory && state.kind == .grass && face != .top && face != .bottom && tile == 3 {
                 let climate = world.climate(atX: position.x, z: position.z)
                 let color =
                     colorMaps?.color(
                         foliage: false, temperature: climate.temperature, humidity: climate.humidity)
                     ?? BlockColorMaps.rgb(9_551_193)
-                let normal = face.offset.vector * 0.0002
                 appendQuad(
-                    points: points.map { $0 + vector(position) + normal },
+                    points: points.map { $0 + blockOffset },
                     uv: points.map(face.textureCoordinates),
                     tile: 38, color: color * face.brightness, layer: .cutout,
                     light: light(position: position, state: state, face: face), lightSamples: lightSamples)
@@ -788,6 +810,7 @@ private struct MeshBuilder {
         case 50, 75, 76: return [MeshBounds(SIMD3(7 / 16, 0, 7 / 16), SIMD3(9 / 16, 10 / 16, 9 / 16))]
         case 53, 67:
             let base = MeshBounds(.zero, SIMD3(1, 0.5, 1))
+            if options.inventory { return [base, MeshBounds(SIMD3(0, 0.5, 0), SIMD3(1, 1, 0.5))] }
             switch metadata & 3 {
             case 0: return [base, MeshBounds(SIMD3(0.5, 0.5, 0), SIMD3(1, 1, 1))]
             case 1: return [base, MeshBounds(SIMD3(0, 0.5, 0), SIMD3(0.5, 1, 1))]
@@ -818,6 +841,14 @@ private struct MeshBuilder {
         case 78: return [MeshBounds(.zero, SIMD3(1, Float(1 + (metadata & 7)) / 8, 1))]
         case 81: return [MeshBounds(SIMD3(1 / 16, 0, 1 / 16), SIMD3(15 / 16, 1, 15 / 16))]
         case 85:
+            if options.inventory {
+                return [
+                    MeshBounds(SIMD3(0.375, 0, 0), SIMD3(0.625, 1, 0.25)),
+                    MeshBounds(SIMD3(0.375, 0, 0.75), SIMD3(0.625, 1, 1)),
+                    MeshBounds(SIMD3(0.4375, 0.8125, -0.125), SIMD3(0.5625, 0.9375, 1.125)),
+                    MeshBounds(SIMD3(0.4375, 0.3125, -0.125), SIMD3(0.5625, 0.4375, 1.125)),
+                ]
+            }
             var boxes = [MeshBounds(SIMD3(6 / 16, 0, 6 / 16), SIMD3(10 / 16, 1, 10 / 16))]
             for direction in [BlockFace.north, .south, .west, .east] {
                 let offset = direction.offset

@@ -7,6 +7,20 @@ final class GameSession: ObservableObject {
     enum Action { case forward, backward, left, right, up, down, fast, jump, sneak }
 
     @Published var worldMenuOpen = false
+    @Published var hideHUD = false
+    @Published var thirdPerson = false
+    @Published var smoothCamera = false
+    @Published var fps = 0
+    @Published var texturePacks: [TexturePackDescriptor] = [.defaultPack]
+    @Published var texturePackURL: URL?
+    @Published var texturePackRevision: UInt64 = 0
+    @Published var hotbarPickupTicks = Array(repeating: 0, count: 9)
+    var recordedDamageTaken = 0
+    var textureSelectionGeneration: UInt64 = 0
+    @Published var showDebug = false
+    @Published var showDeathScreen = false
+    var deathScreenTicks = 0
+    var playerScore = 0
     @Published var availableWorlds: [WorldDescriptor] = []
     @Published var options = GameOptions()
     @Published var statistics = PlayerStatistics()
@@ -17,27 +31,17 @@ final class GameSession: ObservableObject {
     var hasLoadedWorld = false
     let gameDirectory: URL
     var worldDirectory: URL
-    @Published var isMouseCaptured = false
     @Published var errorMessage: String?
-    @Published var positionText = ""
-    @Published var statusText = "Loading world…"
     @Published var isLoading = true
+    @Published var loadingProgress: Double?
     @Published var inventoryOpen = false
     @Published var isPaused = false
     @Published var health = 20
     @Published var selectedHotbar = 0
-    @Published var hotbarLabels = Array(repeating: "", count: 9)
-    @Published var inventoryLabels = Array(repeating: "", count: 36)
     @Published var craftingWidth = 2
-    @Published var craftingLabels = Array(repeating: "", count: 4)
-    @Published var craftingResultLabel = ""
-    @Published var cursorLabel = ""
     @Published var furnaceOpen = false
-    @Published var furnaceLabels = Array(repeating: "", count: 3)
     @Published var furnaceProgress: Double = 0
-    @Published var armorLabels = Array(repeating: "", count: 4)
     @Published var containerTitle = ""
-    @Published var containerLabels: [String] = []
 
     @Published var inventoryItems: [ItemStack?] = Array(repeating: nil, count: 36)
     @Published var armorItems: [ItemStack?] = Array(repeating: nil, count: 4)
@@ -54,14 +58,30 @@ final class GameSession: ObservableObject {
     var pressed: Set<Action> = []
     var touchMovement = SIMD2<Float>.zero
     @Published var isMultiplayer = false
-    @Published var multiplayerStatus = ""
     @Published var chatOpen = false
     @Published var chatLines: [String] = []
+    @Published var chatRevision: UInt64 = 0
     @Published var signEditorOpen = false
     @Published var signLines = ["", "", "", ""]
-    @Published var rainStrength: Float = 0
-    @Published var thunderStrength: Float = 0
-    var cameraPositionDouble: SIMD3<Double> { player.eyePositionDouble }
+    var rainStrength: Float = 0
+    var thunderStrength: Float = 0
+    var renderPartialTick: Float { min(1, max(0, accumulator / 0.05)) }
+    var cameraPositionDouble: SIMD3<Double> { player.interpolatedEyePosition(partialTick: renderPartialTick) }
+    var cursorItem: ItemStack? { cursor }
+    var armorPoints: Int { inventory.armorProtection }
+    var air: Int { player.air }
+    var isUnderwater: Bool { player.isEyeUnderwater(in: world) }
+    var previousHealth: Int { player.previousHealth }
+    var hurtTime: Int { player.hurtTime }
+    var healthFlashTime: Int { player.healthFlashTime }
+    var portalTime: Float = 0
+    var previousPortalTime: Float = 0
+    var furnaceBurnProgress: Double {
+        guard let position = currentContainer, case .furnace(let furnace) = world.blockEntity(at: position)
+        else { return 0 }
+        return Double(furnace.burnTicksRemaining)
+            / Double(max(1, furnace.currentFuelBurnTicks == 0 ? 200 : furnace.currentFuelBurnTicks))
+    }
     var heldItem: ItemStack? { inventory.selectedStack }
     var isMining: Bool { miningPressed && miningTarget != nil && miningProgress > 0 }
     var sessionGeneration: UInt64 = 0
@@ -69,6 +89,7 @@ final class GameSession: ObservableObject {
     var connectionPending = false
     var particleEvents: [BlockEvent] = []
     var weather = WorldWeather(seed: 0)
+    var worldTickState = WorldTickState(randomSeed: 0, coordinateSeed: 0)
     var itemActions = ItemActions(seed: 0)
     var maps = BetaMapCollection()
     var compassDial = ItemDialState()
@@ -93,10 +114,22 @@ final class GameSession: ObservableObject {
     var entitySimulation = EntitySimulation(seed: 0)
     let audio = AudioManager()
     var service: WorldService
-    var accumulator: Float = 0
+    var gameTimer = BetaTimer()
+    var accumulator: Float {
+        get { gameTimer.partialTick / 20 }
+        set { gameTimer.partialTick = min(1, max(0, newValue * 20)) }
+    }
+    var mouseDelta = SIMD2<Float>.zero
+    var mouseFilterX = BetaMouseFilter()
+    var mouseFilterY = BetaMouseFilter()
+    var lastPrimaryTick = 0
+    var lastSecondaryTick = 0
+    var secondaryPressed = false
     var statusElapsed: Float = 0
+    var menuAudioElapsed: Float = 0
     var miningTarget: BlockPosition?
     var miningProgress: Float = 0
+    var miningSoundTicks = 0
     var miningPressed = false
     var blockHitDelay = 0
     var flight = false
@@ -110,7 +143,7 @@ final class GameSession: ObservableObject {
     var lastStreamCenter: ChunkPosition?
     var litRevision: UInt64 = 0
     var relighting = false
-    var tickCount = 0
+    @Published var tickCount = 0
 
     init(directory: URL? = nil, loadAutomatically: Bool = true, supportDirectory: URL? = nil) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -124,6 +157,10 @@ final class GameSession: ObservableObject {
             (try? StatisticsStorage(directory: gameDirectory.appendingPathComponent("stats")).load())
             ?? PlayerStatistics()
         applyOptions()
+        refreshTexturePacks()
+        if let selected = texturePacks.first(where: { $0.name == options.skin }) {
+            selectTexturePack(selected, persist: false)
+        }
         if loadAutomatically {
             if directory != nil {
                 Task { await loadWorld() }
@@ -137,16 +174,19 @@ final class GameSession: ObservableObject {
     }
 
     func update(deltaTime: Float) {
-        guard !isLoading, !worldMenuOpen else { return }
-        audio.update(listener: camera.position, forward: camera.forward)
-        guard !isPaused || isMultiplayer else {
-            accumulator = 0
+        guard !isLoading, !worldMenuOpen else {
+            tickMenuAudio(deltaTime)
             return
         }
-        accumulator += min(max(deltaTime, 0), 0.25)
-        while accumulator >= 0.05 && !isLoading {
+        audio.update(listener: camera.position, forward: camera.forward)
+        guard !isPaused || isMultiplayer else {
+            return
+        }
+        processMouseLook()
+        let ticks = gameTimer.advance(seconds: Double(deltaTime))
+        for _ in 0..<ticks {
+            guard !isLoading else { break }
             tick()
-            accumulator -= 0.05
         }
         updateTarget()
         statusElapsed += deltaTime
@@ -156,16 +196,42 @@ final class GameSession: ObservableObject {
         }
     }
 
+    /// Beta's music scheduler runs every client tick, including on the title screen and while loading.
+    private func tickMenuAudio(_ deltaTime: Float) {
+        menuAudioElapsed += min(deltaTime, 0.25)
+        while menuAudioElapsed >= 0.05 {
+            menuAudioElapsed -= 0.05
+            audio.tick()
+        }
+    }
+
+    func syncAudioPause() { audio.setPaused(isPaused && !isMultiplayer && !worldMenuOpen) }
+
     func tick() {
         if isMultiplayer {
             tickMultiplayer()
             return
         }
+        tickCount += 1
+        if hotbarPickupTicks.contains(where: { $0 > 0 }) {
+            hotbarPickupTicks = hotbarPickupTicks.map { max(0, $0 - 1) }
+        }
+        if miningPressed && tickCount - lastPrimaryTick >= 5 {
+            miningPressed = false
+            primaryAction(isPressed: true)
+        }
+        if secondaryPressed && tickCount - lastSecondaryTick >= 5 {
+            secondaryAction()
+            lastSecondaryTick = tickCount
+        }
+        updateTarget()
+        advanceMining()
         let previous = player.position
         let healthBefore = player.health
         let inventoryBefore = inventory
         let groundedBefore = player.onGround
-        let inputEnabled = !inventoryOpen && !chatOpen && !signEditorOpen
+        let inputEnabled =
+            !inventoryOpen && !chatOpen && !signEditorOpen && !showDeathScreen && sleepTicks == 0
         let forward = inputEnabled ? axis(.forward, .backward) + touchMovement.y : 0
         let strafe = inputEnabled ? axis(.right, .left) + touchMovement.x : 0
         entitySimulation.setRidingInput(forward: forward, strafe: strafe)
@@ -181,12 +247,27 @@ final class GameSession: ObservableObject {
                     forward: forward, strafe: strafe,
                     jump: inputEnabled && pressed.contains(.jump),
                     sneak: inputEnabled && pressed.contains(.sneak)),
-                yaw: camera.yaw, world: world, inventory: &inventory)
+                yaw: camera.yaw, world: world, inventory: &inventory,
+                entityCollisions: entitySimulation.collisionBoxes(
+                    intersecting: player.bounds.expanded(by: SIMD3(repeating: 1))))
             camera.setPosition(player.eyePosition)
         }
         dispatch(player.drainStepEvents())
+        let beforePickup = inventory.slots
+        dispatch(
+            entitySimulation.tick(world: &world, player: &player, inventory: &inventory, time: worldTime))
+        animateHotbarPickups(previous: beforePickup)
+        dispatch(player.drainStepEvents())
+        dispatch(
+            blockSimulation.withWorldRandom(&worldTickState.random) {
+                $0.tickBlockEntities(
+                    world: &world, players: [player.position], entities: entities, time: worldTime)
+            })
+        audio.tick()
+        weather.advanceTimers(dimension: world.dimension, random: &worldTickState.random)
+        entitySimulation.spawnNaturally(
+            in: world, near: player, time: worldTime, worldRandom: &worldTickState.random)
         worldTime += 1
-        tickCount += 1
         tickItemState()
         if sleepTicks > 0 {
             resetInput()
@@ -202,14 +283,11 @@ final class GameSession: ObservableObject {
             }
         }
         updateTarget()
-        advanceMining()
         dispatch(
             blockSimulation.tick(
                 world: &world, players: [player.position], time: worldTime,
-                entities: entitySimulation.entities, weather: weather))
-        dispatch(
-            entitySimulation.tick(world: &world, player: &player, inventory: &inventory, time: worldTime))
-        dispatch(weather.tick(world: &world, players: [player.position], time: worldTime))
+                entities: entitySimulation.entities, weather: &weather, tickState: &worldTickState,
+                includeBlockEntities: false))
         if sleepTicks > 0 && player.health < healthBefore { wakeFromBed(setSpawn: false) }
         rainStrength = weather.rainStrength
         thunderStrength = weather.weightedThunderStrength
@@ -217,13 +295,22 @@ final class GameSession: ObservableObject {
             previous: previous, healthBefore: healthBefore, inventoryBefore: inventoryBefore,
             groundedBefore: groundedBefore)
         if player.health == 0 {
-            statistics.recordDeath()
-            respawnSingleplayer()
-            return
+            if !showDeathScreen {
+                statistics.recordDeath()
+                for stack in (inventory.slots + inventory.armor).compactMap({ $0 }) {
+                    dropFromPlayer(stack, scatter: true)
+                }
+                inventory = PlayerInventory()
+                returnCursorAndCrafting()
+                inventoryOpen = false
+                showDeathScreen = true
+                resetInput()
+            }
+            deathScreenTicks += 1
         }
         updatePortalContact()
         guard !isLoading else { return }
-        let center = ChunkPosition(Int(floor(player.position.x)) >> 4, Int(floor(player.position.z)) >> 4)
+        let center = chunkPosition(of: player.position)
         if (center != lastStreamCenter || streamedRadius < desiredChunkRadius) && !streaming {
             extendWorld(around: center)
         }
@@ -246,7 +333,9 @@ final class GameSession: ObservableObject {
             multiplayerPrimaryAction(isPressed: isPressed)
             return
         }
-        if isPressed && !miningPressed && !inventoryOpen && !isPaused {
+        if isPressed && !miningPressed && !inventoryOpen && !isPaused && player.health > 0 {
+            player.swing()
+            lastPrimaryTick = tickCount
             let damage = inventory.selectedStack?.definition?.attackDamage ?? 1
             let target = entitySimulation.target(
                 origin: player.eyePositionDouble, direction: SIMD3<Double>(camera.forward), reach: 4,
@@ -297,25 +386,33 @@ final class GameSession: ObservableObject {
         if miningTarget != hit.position {
             miningTarget = hit.position
             miningProgress = 0
-            let attacked = blockSimulation.attack(
-                hit: hit, holding: inventory.selectedStack, health: player.health, world: &world,
-                time: worldTime)
+            miningSoundTicks = 0
+            let attacked = blockSimulation.withWorldRandom(&worldTickState.random) {
+                $0.attack(
+                    hit: hit, holding: inventory.selectedStack, health: player.health, world: &world,
+                    time: worldTime)
+            }
             if attacked.healthRestored > 0 { player.heal(attacked.healthRestored) }
             dispatch(attacked.events)
         }
         miningProgress += BlockMining.progressPerTick(
             for: state.kind, with: inventory.selectedStack,
             underwater: player.isInWater, onGround: player.onGround)
-        if tickCount % 4 == 0 { play(stepSound(state.kind), at: hit.position.vector, volume: 0.5) }
+        if miningSoundTicks % 4 == 0 {
+            dispatch([BlockSounds.hit(for: state.kind, at: center(of: hit.position))])
+        }
+        miningSoundTicks += 1
         guard miningProgress >= 1 else { return }
         let tool = inventory.selectedStack
-        let drops = BlockMining.drops(for: state, with: tool)
-        notifyAchievements(statistics.recordMine(state.kind))
+        if BlockMining.canHarvest(state.kind, with: tool) {
+            notifyAchievements(statistics.recordMine(state.kind))
+        }
         if let entity = world.blockEntity(at: hit.position) {
-            dispatch(blockSimulation.containerDrops(entity, at: hit.position))
+            dispatch(blockSimulation.containerDrops(entity, at: hit.position, kind: state.kind))
         }
         if state.kind == .jukebox { audio.playRecord(nil) }
         world.setBlock(nil, at: hit.position)
+        _ = BlockInteractions.didRemove(state, at: hit.position, world: &world)
         enqueueParticle(
             .particle(
                 name: "tilecrack_\(state.kind.rawValue)_\(state.metadata)", position: center(of: hit.position)
@@ -329,9 +426,9 @@ final class GameSession: ObservableObject {
             }
             if inventory.selectedStack == nil { notifyAchievements(statistics.recordBreak(itemID: tool.id)) }
         }
-        for stack in drops { entitySimulation.drop(stack, at: center(of: hit.position)) }
-        dispatch(blockSimulation.blockChanged(at: hit.position, world: &world, time: worldTime))
-        play(state.kind == .glass ? "random.glass" : stepSound(state.kind), at: hit.position.vector)
+        notifyBlockChanged(at: hit.position, previousState: state)
+        dispatch(BlockDrops.harvest(state, at: hit.position, with: tool, random: &worldTickState.random))
+        dispatch([BlockSounds.breaking(for: state.kind, at: center(of: hit.position))])
         miningProgress = 0
         miningTarget = nil
         blockHitDelay = 5
@@ -343,13 +440,14 @@ final class GameSession: ObservableObject {
             multiplayerSecondaryAction()
             return
         }
-        guard !isLoading && !isPaused && !inventoryOpen else { return }
+        guard !isLoading && !isPaused && !inventoryOpen && player.health > 0 else { return }
         let usedItem = inventory.selectedStack
         switch entitySimulation.interactResult(
             origin: player.eyePositionDouble, direction: SIMD3<Double>(camera.forward),
             reach: min(selectedBlock?.distance ?? 4, 4), player: &player, inventory: &inventory, world: world)
         {
         case .used:
+            player.swing()
             refreshHUD()
             return
         case .container(let id):
@@ -368,7 +466,8 @@ final class GameSession: ObservableObject {
             applyItemAction(
                 itemActions.useInAir(
                     world: &world, player: &player, inventory: &inventory,
-                    entities: &entitySimulation, yaw: camera.yaw, pitch: camera.pitch), itemID: usedItem?.id)
+                    entities: &entitySimulation, yaw: camera.yaw, pitch: camera.pitch,
+                    random: &worldTickState.random), itemID: usedItem?.id)
             refreshHUD()
             return
         }
@@ -379,9 +478,11 @@ final class GameSession: ObservableObject {
             oldRecord = nil
         }
         let placingSign = inventory.selectedStack?.id == 323
-        let result = BlockInteractions.use(
+        let result = itemActions.interactWithBlock(
             hit: hit, holding: inventory.selectedStack, yaw: camera.yaw,
-            playerBounds: player.bounds, world: &world, health: player.health)
+            playerBounds: player.bounds, world: &world, health: player.health,
+            placementBlockers: entities.filter(\.preventsBlockSpawning).map(\.bounds),
+            random: &worldTickState.random)
         if result.replaceHeldStack {
             inventory.slots[inventory.selectedHotbar] = result.replacement
         } else if result.consumed > 0 {
@@ -390,7 +491,7 @@ final class GameSession: ObservableObject {
         inventory.damageSelected(by: result.durabilityDamage)
         if result.healthRestored > 0 { player.heal(result.healthRestored) }
         for position in result.changedPositions {
-            dispatch(blockSimulation.blockChanged(at: position, world: &world, time: worldTime))
+            notifyBlockChanged(at: position)
         }
         dispatch(result.events)
         if result.handled && result.itemUsed, let id = usedItem?.id {
@@ -413,7 +514,8 @@ final class GameSession: ObservableObject {
                 applyItemAction(
                     itemActions.useInAir(
                         world: &world, player: &player, inventory: &inventory,
-                        entities: &entitySimulation, yaw: camera.yaw, pitch: camera.pitch),
+                        entities: &entitySimulation, yaw: camera.yaw, pitch: camera.pitch,
+                        random: &worldTickState.random),
                     itemID: usedItem?.id)
             }
         }
@@ -425,6 +527,7 @@ final class GameSession: ObservableObject {
         {
             beginSignEditing(at: position)
         }
+        if result.handled { player.swing() }
         if let bed = result.sleepAt { beginSleeping(at: bed) }
         refreshHUD()
     }
@@ -471,6 +574,7 @@ final class GameSession: ObservableObject {
     func cycleHotbar(_ direction: Int) { selectHotbar((inventory.selectedHotbar - direction % 9 + 9) % 9) }
 
     func toggleInventory() {
+        guard !showDeathScreen else { return }
         if isMultiplayer {
             toggleMultiplayerInventory()
             return
@@ -487,156 +591,22 @@ final class GameSession: ObservableObject {
         inventoryOpen.toggle()
         if inventoryOpen { notifyAchievements(statistics.recordInventoryOpen()) }
         resetInput()
-        audio.setPaused(isPaused && !isMultiplayer)
+        syncAudioPause()
         refreshHUD()
     }
 
     func togglePause() {
+        guard !showDeathScreen else { return }
         if !isMultiplayer && sleepTicks > 0 { wakeFromBed(setSpawn: false) }
         isPaused.toggle()
         resetInput()
-        audio.setPaused(isPaused && !isMultiplayer)
+        syncAudioPause()
     }
 
     func toggleFlight() {
         guard !isMultiplayer else { return }
         flight.toggle()
-        statusText = flight ? "Debug flight enabled" : "Survival movement"
         player.teleport(to: SIMD3<Double>(camera.position) - SIMD3(0, 1.62, 0))
-    }
-
-    func inventoryClick(slot: Int, secondary: Bool = false) {
-        if isMultiplayer {
-            multiplayerInventoryClick(slot: slot, secondary: secondary)
-            return
-        }
-        guard inventory.slots.indices.contains(slot) else { return }
-        exchange(&inventory.slots[slot], secondary: secondary)
-        refreshHUD()
-    }
-
-    func craftingClick(slot: Int, secondary: Bool = false) {
-        if isMultiplayer {
-            multiplayerCraftingClick(slot: slot, secondary: secondary)
-            return
-        }
-        guard crafting.slots.indices.contains(slot) else { return }
-        exchange(&crafting.slots[slot], secondary: secondary)
-        refreshHUD()
-    }
-
-    func armorClick(slot: Int) {
-        if isMultiplayer {
-            multiplayerWindowClick(slot: slot + 5, secondary: false)
-            return
-        }
-        guard inventory.armor.indices.contains(slot) else { return }
-        if let cursor, cursor.definition?.armorSlot != slot { return }
-        exchange(&inventory.armor[slot])
-        refreshHUD()
-    }
-
-    func containerClick(slot: Int, secondary: Bool = false) {
-        if isMultiplayer {
-            multiplayerWindowClick(slot: slot, secondary: secondary)
-            return
-        }
-        if let id = currentContainerEntity {
-            entitySimulation.update(id: id) { entity in
-                guard entity.contents.indices.contains(slot) else { return }
-                exchange(&entity.contents[slot], secondary: secondary)
-            }
-            refreshHUD()
-            return
-        }
-        var index = slot
-        for position in containerPositions {
-            guard let entity = world.blockEntity(at: position) else { continue }
-            var slots = entity.contents
-            if slots.indices.contains(index) {
-                exchange(&slots[index], secondary: secondary)
-                switch entity {
-                case .chest: world.setBlockEntity(.chest(slots: slots), at: position)
-                case .dispenser: world.setBlockEntity(.dispenser(slots: slots), at: position)
-                default: return
-                }
-                refreshHUD()
-                return
-            }
-            index -= slots.count
-        }
-    }
-
-    func takeCraftingResult() {
-        if isMultiplayer {
-            multiplayerWindowClick(slot: 0, secondary: false)
-            return
-        }
-        guard let result = crafting.result else { return }
-        if let cursor {
-            guard cursor.canStack(with: result), cursor.count + result.count <= cursor.maximumStackSize else {
-                return
-            }
-        }
-        guard var made = crafting.craft() else { return }
-        if made.id == 358 { made = maps.craft(at: player.position, dimension: world.dimension) }
-        if cursor == nil { cursor = made } else { cursor?.count += made.count }
-        notifyAchievements(statistics.recordCraft(made))
-        play("random.click", volume: 0.3)
-        refreshHUD()
-    }
-
-    func furnaceClick(slot: Int) {
-        if isMultiplayer {
-            multiplayerWindowClick(slot: slot, secondary: false)
-            return
-        }
-        guard let position = currentContainer, case .furnace(var furnace) = world.blockEntity(at: position)
-        else { return }
-        switch slot {
-        case 0: exchange(&furnace.input)
-        case 1: exchange(&furnace.fuel)
-        case 2:
-            guard let output = furnace.output else { return }
-            if cursor == nil {
-                cursor = output
-                furnace.output = nil
-                notifyAchievements(statistics.recordCraft(output, source: .furnace))
-            } else if cursor?.canStack(with: output) == true,
-                cursor!.count + output.count <= cursor!.maximumStackSize
-            {
-                cursor?.count += output.count
-                furnace.output = nil
-                notifyAchievements(statistics.recordCraft(output, source: .furnace))
-            }
-        default: return
-        }
-        world.setBlockEntity(.furnace(furnace), at: position)
-        refreshHUD()
-    }
-
-    func exchange(_ slot: inout ItemStack?, secondary: Bool = false) {
-        SlotTransfer.exchange(cursor: &cursor, slot: &slot, secondary: secondary)
-        play("random.click", volume: 0.3)
-    }
-
-    func returnCursorAndCrafting() {
-        guard !isMultiplayer else { return }
-        for stack in ([cursor] + crafting.slots).compactMap({ $0 }) {
-            if let remaining = inventory.insert(stack) {
-                entitySimulation.drop(remaining, at: player.position)
-            }
-        }
-        cursor = nil
-        crafting = CraftingGrid(width: craftingWidth, height: craftingWidth)
-    }
-
-    func resizeCrafting(to width: Int) {
-        if crafting.width != width {
-            returnCursorAndCrafting()
-            crafting = CraftingGrid(width: width, height: width)
-        }
-        craftingWidth = width
     }
 
     func dispatch(_ events: [BlockEvent]) {
@@ -650,9 +620,10 @@ final class GameSession: ObservableObject {
                 if !isMultiplayer { entitySimulation.drop(stack, at: position, velocity: velocity) }
             case .stepped(let position, let source):
                 if !isMultiplayer {
-                    dispatch(
-                        blockSimulation.stepped(
-                            at: position, world: &world, time: worldTime, position: source))
+                    let events = blockSimulation.withWorldRandom(&worldTickState.random) {
+                        $0.stepped(at: position, world: &world, time: worldTime, position: source)
+                    }
+                    dispatch(events)
                 }
             case .sound(let name, let position, let volume, let pitch):
                 play(name, at: SIMD3<Float>(position), volume: volume, pitch: pitch)
@@ -666,7 +637,8 @@ final class GameSession: ObservableObject {
                 enqueueParticle(event)
                 guard !isMultiplayer else { continue }
                 let aftermath = entitySimulation.explode(
-                    at: position, power: power, world: &world, player: &player)
+                    at: position, power: power, world: &world, player: &player, inventory: &inventory,
+                    worldRandom: &worldTickState.random)
                 dispatch(aftermath)
             case .particle: enqueueParticle(event)
             case .displace(let bounds, let delta):
@@ -704,37 +676,71 @@ final class GameSession: ObservableObject {
     }
 
     func refreshHUD() {
-        let p = player.position
-        positionText = String(format: "XYZ  %.1f  %.1f  %.1f  ·  Beta 1.7.3", p.x, p.y, p.z)
         health = player.health
         selectedHotbar = inventory.selectedHotbar
         inventoryItems = inventory.slots
-        armorItems = inventory.armor
-        inventoryLabels = inventory.slots.map(label)
-        armorLabels = inventory.armor.map(label)
+        armorItems = Array(inventory.armor.reversed())
         if let id = currentContainerEntity {
             containerItems = entities.first(where: { $0.id == id })?.contents ?? []
         } else {
             containerItems = containerPositions.flatMap { world.blockEntity(at: $0)?.contents ?? [] }
         }
-        containerLabels = containerItems.map(label)
-        hotbarLabels = Array(inventoryLabels.prefix(9))
         craftingItems = crafting.slots
         craftingResultItem = crafting.result
-        craftingLabels = crafting.slots.map(label)
-        craftingResultLabel = label(crafting.result)
-        cursorLabel = label(cursor)
         if let position = currentContainer, case .furnace(let furnace) = world.blockEntity(at: position) {
             furnaceItems = [furnace.input, furnace.fuel, furnace.output]
-            furnaceLabels = furnaceItems.map(label)
             furnaceProgress = Double(furnace.cookTicks) / 200
         }
         if isMultiplayer { refreshMultiplayerHUD() }
     }
 
-    func label(_ stack: ItemStack?) -> String {
-        guard let stack else { return "" }
-        return stack.count == 1 ? stack.name : "\(stack.name) ×\(stack.count)"
+    /// True while a screen, load, or pause is taking input away from gameplay.
+    var isInputBlocked: Bool {
+        inventoryOpen || isPaused || isLoading || worldMenuOpen || showDeathScreen || chatOpen
+            || signEditorOpen
+    }
+
+    func releaseInputAndPause() {
+        primaryAction(isPressed: false)
+        resetInput()
+        if !isPaused && !inventoryOpen { togglePause() }
+    }
+
+    func persist(completion: (@MainActor () -> Void)? = nil) {
+        returnCursorAndCrafting()
+        saveWorld(completion: completion)
+    }
+
+    /// Cancels background world work; completions from earlier generations are ignored afterwards.
+    func invalidateWorldTasks() {
+        streamingTask?.cancel()
+        sessionGeneration &+= 1
+        streaming = false
+        relighting = false
+        evictionInProgress = false
+    }
+
+    /// Closes every screen and container and discards the cursor, crafting grid, and sleep state.
+    func closeScreens() {
+        inventoryOpen = false
+        chatOpen = false
+        signEditorOpen = false
+        furnaceOpen = false
+        currentContainer = nil
+        currentContainerEntity = nil
+        containerPositions = []
+        containerTitle = ""
+        cursor = nil
+        crafting = CraftingGrid()
+        craftingWidth = 2
+        sleepingBed = nil
+        sleepTicks = 0
+    }
+
+    func postChat(_ text: String) {
+        chatLines.append(text)
+        if chatLines.count > 50 { chatLines.removeFirst(chatLines.count - 50) }
+        chatRevision &+= 1
     }
 
     func resetInput() {
@@ -742,6 +748,8 @@ final class GameSession: ObservableObject {
         pressed.removeAll()
         touchMovement = .zero
         miningPressed = false
+        secondaryPressed = false
+        mouseDelta = .zero
         miningTarget = nil
         miningProgress = 0
     }

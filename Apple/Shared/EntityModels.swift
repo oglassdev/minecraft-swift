@@ -26,7 +26,8 @@ struct EntityModelPart {
 
     func vertices(
         position: SIMD3<Float>, yaw: Float, scale: Float, originY: Float,
-        tint: SIMD3<Float>, light: UInt8, opacity: Float
+        tint: SIMD3<Float>, light: UInt8, opacity: Float, transform: simd_float4x4 = matrix_identity_float4x4,
+        lightTransform: simd_float3x3 = matrix_identity_float3x3
     ) -> [BlockVertex] {
         var low = minimum - SIMD3(repeating: inflation)
         var high = minimum + size + SIMD3(repeating: inflation)
@@ -40,35 +41,62 @@ struct EntityModelPart {
         let x = size.x
         let y = size.y
         let z = size.z
-        let faces: [([Int], SIMD4<Float>, Float)] = [
-            ([5, 1, 2, 6], SIMD4(z + x, z, z + x + z, z + y), 0.8),
-            ([0, 4, 7, 3], SIMD4(0, z, z, z + y), 0.8),
-            ([5, 4, 0, 1], SIMD4(z, 0, z + x, z), 1),
-            ([2, 3, 7, 6], SIMD4(z + x, 0, z + x + x, z), 0.6),
-            ([1, 0, 3, 2], SIMD4(z, z, z + x, z + y), 0.85),
-            ([4, 5, 6, 7], SIMD4(z + x + z, z, z + x + z + x, z + y), 0.7),
+        let rects = [
+            SIMD4(z + x, z, z + x + z, z + y), SIMD4(0, z, z, z + y), SIMD4(z, 0, z + x, z),
+            SIMD4(z + x, 0, z + x + x, z), SIMD4(z, z, z + x, z + y),
+            SIMD4(z + x + z, z, z + x + z + x, z + y),
         ]
         var result: [BlockVertex] = []
         result.reserveCapacity(36)
-        for (indices, rect, shade) in faces {
+        let columns = transform.columns
+        let normalMatrix =
+            transform == matrix_identity_float4x4
+            ? matrix_identity_float3x3
+            : simd_transpose(
+                simd_inverse(
+                    simd_float3x3(
+                        columns: (
+                            SIMD3(columns.0.x, columns.0.y, columns.0.z),
+                            SIMD3(columns.1.x, columns.1.y, columns.1.z),
+                            SIMD3(columns.2.x, columns.2.y, columns.2.z)
+                        ))))
+        for (faceIndex, indices) in Self.faceCorners.enumerated() {
+            let rect = rects[faceIndex]
+            var normal = simd_normalize(
+                simd_cross(points[indices[1]] - points[indices[0]], points[indices[2]] - points[indices[0]]))
+            if mirrored { normal = -normal }
+            normal = Self.rotate(normal, by: rotation)
+            normal = simd_normalize(normalMatrix * SIMD3(-normal.x, -normal.y, normal.z))
+            normal = Self.rotate(normal, by: SIMD3(0, -yaw, 0))
+            let shade = BetaLighting.shade(normal: lightTransform * normal)
             let u0 = (texture.x + rect.x) / 64 + 0.0015625
             let u1 = (texture.x + rect.z) / 64 - 0.0015625
             let v0 = (texture.y + rect.y) / 32 + 0.003125
             let v1 = (texture.y + rect.w) / 32 - 0.003125
-            let uv = [SIMD2(u1, v0), SIMD2(u0, v0), SIMD2(u0, v1), SIMD2(u1, v1)]
-            let order = mirrored ? [3, 2, 1, 3, 1, 0] : [0, 1, 2, 0, 2, 3]
-            for index in order {
+            let u = SIMD4(u1, u0, u0, u1)
+            let v = SIMD4(v0, v0, v1, v1)
+            for index in mirrored ? Self.mirroredOrder : Self.windingOrder {
                 let local = Self.rotate(points[indices[index]], by: rotation) + pivot
                 let converted = SIMD3(-local.x, originY - local.y, local.z) / 16 * scale
-                let world = position + Self.rotate(converted, by: SIMD3(0, -yaw, 0))
+                let transformed = transform * SIMD4(converted, 1)
+                let world =
+                    position
+                    + Self.rotate(SIMD3(transformed.x, transformed.y, transformed.z), by: SIMD3(0, -yaw, 0))
                 result.append(
                     BlockVertex(
-                        position: world, color: tint * shade, uv: uv[index],
+                        position: world, color: tint * shade, uv: SIMD2(u[index], v[index]),
                         opacity: opacity, light: light))
             }
         }
         return result
     }
+
+    private static let faceCorners: [SIMD4<Int>] = [
+        SIMD4(5, 1, 2, 6), SIMD4(0, 4, 7, 3), SIMD4(5, 4, 0, 1), SIMD4(2, 3, 7, 6), SIMD4(1, 0, 3, 2),
+        SIMD4(4, 5, 6, 7),
+    ]
+    private static let windingOrder = [0, 1, 2, 0, 2, 3]
+    private static let mirroredOrder = [3, 2, 1, 3, 1, 0]
 
     static func rotate(_ point: SIMD3<Float>, by rotation: SIMD3<Float>) -> SIMD3<Float> {
         let x = SIMD3(
@@ -88,18 +116,24 @@ struct EntityModelLayer {
     var parts: [EntityModelPart]
     var tint = SIMD3<Float>(repeating: 1)
     var scale: Float = 1
-    var originY: Float = 24
+    var originY: Float = 24.125
     var opacity: Float = 1
     var blended = false
+    var fullbright = false
+    var additive = false
+    var uvOffset = SIMD2<Float>.zero
+    var transform = matrix_identity_float4x4
 }
 
 /// Cuboid dimensions and skin rectangles follow the original Beta model classes.
 enum EntityModels {
-    static func layers(entity: GameEntity, phase: Float, amplitude: Float, age: Float) -> [EntityModelLayer] {
+    static func layers(
+        entity: GameEntity, phase: Float, amplitude: Float, age: Float, partial: Float = 1, headYaw: Float = 0
+    ) -> [EntityModelLayer] {
         let stride = phase * 0.6662
         let swing = cos(stride) * 1.4 * amplitude
         let opposite = cos(stride + .pi) * 1.4 * amplitude
-        let head = SIMD3(-entity.pitch, 0, 0)
+        let head = SIMD3(-entity.pitch, headYaw, 0)
         switch entity.kind {
         case "player", "zombie", "skeleton", "pigZombie":
             let player = entity.kind == "player"
@@ -147,7 +181,7 @@ enum EntityModels {
                 EntityModelLayer(
                     texture:
                         "mob/\(player ? "char" : (entity.kind == "pigZombie" ? "pigzombie" : entity.kind))",
-                    parts: parts)
+                    parts: parts, scale: player ? 0.9375 : 1)
             ]
             if player {
                 for stack in entity.contents.dropFirst().compactMap({ $0 }) {
@@ -162,16 +196,29 @@ enum EntityModels {
                         return part
                     }
                     layers.append(
-                        EntityModelLayer(texture: "armor/\(material)_\(slot == 2 ? 2 : 1)", parts: armor))
+                        EntityModelLayer(
+                            texture: "armor/\(material)_\(slot == 2 ? 2 : 1)", parts: armor, scale: 0.9375))
                 }
             }
             return layers
         case "pig":
-            return [
+            let parts = quadruped(legHeight: 6, swing: swing, opposite: opposite, head: head)
+            var layers = [
                 EntityModelLayer(
                     texture: "mob/pig",
-                    parts: quadruped(legHeight: 6, swing: swing, opposite: opposite, head: head))
+                    parts: parts)
             ]
+            if entity.metadata & 1 != 0 {
+                layers.append(
+                    EntityModelLayer(
+                        texture: "mob/saddle",
+                        parts: parts.map { part in
+                            var part = part
+                            part.inflation = 0.5
+                            return part
+                        }))
+            }
+            return layers
         case "cow":
             var parts = quadruped(legHeight: 12, swing: swing, opposite: opposite, head: head)
             parts[0] = part(-4, -4, -6, 8, 8, 6, 0, 4, -8, 0, 0, rotation: head)
@@ -206,7 +253,11 @@ enum EntityModels {
                     tint: fleeceColors[Int(entity.metadata & 15)]),
             ]
         case "chicken":
-            let flap = entity.onGround ? Float(0) : sin(age * 1.3) * 1.1
+            let wingRotation =
+                entity.previousWingRotation + (entity.wingRotation - entity.previousWingRotation) * partial
+            let wingSpread =
+                entity.previousWingSpread + (entity.wingSpread - entity.previousWingSpread) * partial
+            let flap = (BetaVisualMath.sine(wingRotation) + 1) * wingSpread
             return [
                 EntityModelLayer(
                     texture: "mob/chicken",
@@ -222,18 +273,34 @@ enum EntityModels {
                     ])
             ]
         case "creeper":
-            return [
-                EntityModelLayer(
-                    texture: "mob/creeper",
-                    parts: [
-                        part(-4, -8, -4, 8, 8, 8, 0, 4, 0, 0, 0, rotation: head),
-                        part(-4, 0, -2, 8, 12, 4, 0, 4, 0, 16, 16),
-                        part(-2, 0, -2, 4, 6, 4, -2, 16, 4, 0, 16, rotation: SIMD3(swing, 0, 0)),
-                        part(-2, 0, -2, 4, 6, 4, 2, 16, 4, 0, 16, rotation: SIMD3(opposite, 0, 0)),
-                        part(-2, 0, -2, 4, 6, 4, -2, 16, -4, 0, 16, rotation: SIMD3(opposite, 0, 0)),
-                        part(-2, 0, -2, 4, 6, 4, 2, 16, -4, 0, 16, rotation: SIMD3(swing, 0, 0)),
-                    ])
+            let parts = [
+                part(-4, -8, -4, 8, 8, 8, 0, 4, 0, 0, 0, rotation: head),
+                part(-4, 0, -2, 8, 12, 4, 0, 4, 0, 16, 16),
+                part(-2, 0, -2, 4, 6, 4, -2, 16, 4, 0, 16, rotation: SIMD3(swing, 0, 0)),
+                part(-2, 0, -2, 4, 6, 4, 2, 16, 4, 0, 16, rotation: SIMD3(opposite, 0, 0)),
+                part(-2, 0, -2, 4, 6, 4, -2, 16, -4, 0, 16, rotation: SIMD3(opposite, 0, 0)),
+                part(-2, 0, -2, 4, 6, 4, 2, 16, -4, 0, 16, rotation: SIMD3(swing, 0, 0)),
             ]
+            let swelling = Float(entity.fuseTicks) / 28
+            let wobble = 1 + sin(swelling * 100) * swelling * 0.01
+            let amount = pow(min(1, max(0, swelling)), 4)
+            let transform = simd_float4x4(
+                diagonal: SIMD4(
+                    (1 + amount * 0.4) * wobble, (1 + amount * 0.1) / wobble, (1 + amount * 0.4) * wobble, 1))
+            var layers = [EntityModelLayer(texture: "mob/creeper", parts: parts, transform: transform)]
+            if entity.metadata & 1 != 0 {
+                layers.append(
+                    EntityModelLayer(
+                        texture: "armor/power",
+                        parts: parts.map { part in
+                            var part = part
+                            part.inflation = 2
+                            return part
+                        },
+                        tint: SIMD3(repeating: 0.5), blended: true, fullbright: true, additive: true,
+                        uvOffset: SIMD2(repeating: age * 0.01), transform: transform))
+            }
+            return layers
         case "spider":
             var parts = [
                 part(-4, -4, -8, 8, 8, 8, 0, 15, -3, 32, 4, rotation: head),
@@ -257,7 +324,11 @@ enum EntityModels {
                         -1, -1, -1, 16, 2, 2, 4, 15, Float(2 - pair), 18, 0,
                         rotation: SIMD3(0, -baseYaw - sweep, spread - lift)))
             }
-            return [EntityModelLayer(texture: "mob/spider", parts: parts)]
+            return [
+                EntityModelLayer(texture: "mob/spider", parts: parts),
+                EntityModelLayer(
+                    texture: "mob/spider_eyes", parts: parts, opacity: 0.5, blended: true, fullbright: true),
+            ]
         case "wolf":
             let texture =
                 entity.angerTicks > 0
@@ -270,7 +341,14 @@ enum EntityModels {
                 part(-1, 0, -1, 2, 8, 2, 0.5, 16, 7, 0, 18, rotation: SIMD3(opposite, 0, 0)),
                 part(-1, 0, -1, 2, 8, 2, -2.5, 16, -4, 0, 18, rotation: SIMD3(opposite, 0, 0)),
                 part(-1, 0, -1, 2, 8, 2, 0.5, 16, -4, 0, 18, rotation: SIMD3(swing, 0, 0)),
-                part(-1, 0, -1, 2, 8, 2, -1, 12, 8, 9, 18, rotation: SIMD3(.pi / 5, swing, 0)),
+                part(
+                    -1, 0, -1, 2, 8, 2, -1, 12, 8, 9, 18,
+                    rotation: SIMD3(
+                        entity.metadata & 2 != 0
+                            ? 1.5393804
+                            : (entity.owner != nil
+                                ? (0.55 - Float(20 - entity.health) * 0.02) * .pi : .pi / 5),
+                        entity.metadata & 2 != 0 ? 0 : swing, 0)),
                 part(-3, -5, 0, 2, 2, 1, -1, 13.5, -7, 16, 14, rotation: head),
                 part(1, -5, 0, 2, 2, 1, -1, 13.5, -7, 16, 14, rotation: head),
                 part(-2, 0, -5, 3, 3, 4, -0.5, 13.5, -7, 0, 10, rotation: head),
@@ -280,6 +358,7 @@ enum EntityModels {
                 parts[1].rotation.x = .pi / 4
                 parts[2].pivot = SIMD3(-1, 16, -3)
                 parts[2].rotation.x = .pi * 0.4
+                parts[7].pivot = SIMD3(-1, 21, 6)
                 parts[3].pivot = SIMD3(-2.5, 22, 2)
                 parts[3].rotation.x = .pi * 1.5
                 parts[4].pivot = SIMD3(0.5, 22, 2)
@@ -289,7 +368,22 @@ enum EntityModels {
                 parts[6].pivot = SIMD3(0.51, 17, -4)
                 parts[6].rotation.x = 5.811947
             }
-            return [EntityModelLayer(texture: texture, parts: parts)]
+            func shake(_ offset: Float) -> Float {
+                let amount =
+                    entity.previousWolfShake + (entity.wolfShakeProgress - entity.previousWolfShake) * partial
+                let progress = min(1, max(0, (amount + offset) / 1.8))
+                return BetaVisualMath.sine(progress * BetaVisualMath.pi)
+                    * BetaVisualMath.sine(progress * BetaVisualMath.pi * 11) * 0.15 * BetaVisualMath.pi
+            }
+            let headRoll = entity.wolfInterest * 0.15 * .pi + shake(0)
+            for index in [0, 8, 9, 10] { parts[index].rotation.z = headRoll }
+            parts[2].rotation.z = shake(-0.08)
+            parts[1].rotation.z = shake(-0.16)
+            parts[7].rotation.z = shake(-0.2)
+            let shakeAmount =
+                entity.previousWolfShake + (entity.wolfShakeProgress - entity.previousWolfShake) * partial
+            let wetShade: Float = entity.wolfWet ? 0.75 + shakeAmount / 2 * 0.25 : 1
+            return [EntityModelLayer(texture: texture, parts: parts, tint: SIMD3(repeating: wetShade))]
         case "squid":
             var parts = [part(-6, -8, -6, 12, 16, 12, 0, 8, 0, 0, 0)]
             for index in 0..<8 {
@@ -297,9 +391,14 @@ enum EntityModels {
                 parts.append(
                     part(
                         -1, 0, -1, 2, 18, 2, cos(angle) * 5, 15, sin(angle) * 5, 48, 0,
-                        rotation: SIMD3(0.35 + sin(age * 0.2) * 0.3, -angle + .pi / 2, 0)))
+                        rotation: SIMD3(entity.squidTentacleAngle, -angle + .pi / 2, 0)))
             }
-            return [EntityModelLayer(texture: "mob/squid", parts: parts)]
+            let transform =
+                HeldItemGeometry.translation(SIMD3(0, 0.5, 0))
+                * HeldItemGeometry.rotation(entity.squidBodyPitch, axis: SIMD3(1, 0, 0))
+                * HeldItemGeometry.rotation(entity.squidBodyRotation * 180 / .pi, axis: SIMD3(0, 1, 0))
+                * HeldItemGeometry.translation(SIMD3(0, -1.2, 0))
+            return [EntityModelLayer(texture: "mob/squid", parts: parts, transform: transform)]
         case "ghast":
             var random = JavaRandom(seed: 1660)
             var parts = [part(-8, -8, -8, 16, 16, 16, 0, 8, 0, 0, 0)]
@@ -311,9 +410,22 @@ enum EntityModels {
                         -1, 0, -1, 2, Float(random.nextInt(bound: 7) + 8), 2, x, 15, z, 0, 0,
                         rotation: SIMD3(0.2 * sin(age * 0.3 + Float(index)) + 0.4, 0, 0)))
             }
-            return [EntityModelLayer(texture: "mob/ghast", parts: parts, scale: 4.5)]
+            let charge = min(1, max(0, Float(entity.specialTicks) / 20))
+            let squeeze = 1 / (pow(charge, 5) * 2 + 1)
+            let transform = simd_float4x4(
+                diagonal: SIMD4((8 + 1 / squeeze) / 9, (8 + squeeze) / 9, (8 + 1 / squeeze) / 9, 1))
+            return [
+                EntityModelLayer(
+                    texture: entity.metadata & 1 != 0 ? "mob/ghast_fire" : "mob/ghast", parts: parts,
+                    scale: 4.5, transform: transform)
+            ]
         case "slime":
             let scale = Float(max(1, Int(entity.metadata)))
+            let squish =
+                (entity.previousSquishAmount + (entity.squishAmount - entity.previousSquishAmount) * partial)
+                / (scale * 0.5 + 1)
+            let squeeze = 1 / (squish + 1)
+            let transform = simd_float4x4(diagonal: SIMD4(squeeze, 1 / squeeze, squeeze, 1))
             let inner = [
                 part(-3, 17, -3, 6, 6, 6, 0, 0, 0, 0, 16),
                 part(-3.25, 18, -3.5, 2, 2, 2, 0, 0, 0, 32, 0),
@@ -321,13 +433,25 @@ enum EntityModels {
                 part(0, 21, -3.5, 1, 1, 1, 0, 0, 0, 32, 8),
             ]
             return [
-                EntityModelLayer(texture: "mob/slime", parts: inner, scale: scale),
+                EntityModelLayer(texture: "mob/slime", parts: inner, scale: scale, transform: transform),
                 EntityModelLayer(
                     texture: "mob/slime", parts: [part(-4, 16, -4, 8, 8, 8, 0, 0, 0, 0, 0)],
-                    scale: scale, opacity: 0.55, blended: true),
+                    scale: scale, opacity: 1, blended: true, transform: transform),
             ]
         case "boat", "minecart":
-            return [vehicle(kind: entity.kind)]
+            var layer = vehicle(kind: entity.kind)
+            let hit = Float(entity.vehicleHitTicks) - partial
+            let damage = max(0, Float(entity.vehicleDamage) - partial)
+            let rocking =
+                hit > 0
+                ? BetaVisualMath.sine(hit) * hit * damage / 10 * Float(entity.vehicleForwardDirection) : 0
+            layer.transform =
+                HeldItemGeometry.translation(SIMD3(0, Float(entity.height) / 2, 0))
+                * HeldItemGeometry.rotation(
+                    entity.kind == "minecart" ? entity.pitch * 180 / BetaVisualMath.pi : 0,
+                    axis: SIMD3(0, 0, 1))
+                * HeldItemGeometry.rotation(rocking, axis: SIMD3(1, 0, 0))
+            return [layer]
         default: return []
         }
     }
@@ -355,6 +479,10 @@ enum EntityModels {
             width, length - (boat ? 4 : 0), boat ? 4 : 2, 0, 4, 0, 0, boat ? 8 : 10,
             rotation: SIMD3(.pi / 2, 0, 0))
         var parts = [floor]
+        if !boat {
+            parts.append(
+                part(-9, -7, -1, 18, 14, 1, 0, 4.1, 0, 44, 10, rotation: SIMD3(-BetaVisualMath.pi / 2, 0, 0)))
+        }
         for index in 0..<4 {
             let x: Float = index == 0 ? -width / 2 + 1 : (index == 1 ? width / 2 - 1 : 0)
             let z: Float = index == 2 ? -length / 2 + 1 : (index == 3 ? length / 2 - 1 : 0)
@@ -366,7 +494,7 @@ enum EntityModels {
         }
         return EntityModelLayer(
             texture: boat ? "item/boat" : "item/cart", parts: parts,
-            originY: boat ? 8 : 5)
+            originY: 0)
     }
 
     private static func part(

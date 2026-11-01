@@ -76,6 +76,30 @@ public struct WorldCatalog: Sendable {
         }
     }
 
+    public func rename(_ world: WorldDescriptor, name: String) throws {
+        try validate(world)
+        guard var document = levelDocument(in: world.directory),
+            var root = document.tag.compoundValue, var fields = root["Data"]?.compoundValue
+        else { throw LegacyConversionError.missingLevel }
+        let level = world.directory.appendingPathComponent("level.dat")
+        fields["LevelName"] = .string(JavaText.trim(name))
+        root["Data"] = .compound(fields)
+        document.tag = .compound(root)
+        try NBTCompression.gzip.compress(NBTCodec.encode(document)).write(to: level, options: .atomic)
+    }
+
+    public func delete(_ world: WorldDescriptor) throws {
+        try validate(world)
+        try FileManager.default.removeItem(at: world.directory)
+    }
+
+    private func validate(_ world: WorldDescriptor) throws {
+        let path = world.directory.standardizedFileURL
+        guard path.deletingLastPathComponent().path == directory.path,
+            (try path.resourceValues(forKeys: [.isSymbolicLinkKey])).isSymbolicLink != true
+        else { throw CocoaError(.fileReadNoPermission) }
+    }
+
     public static func seed(
         from text: String,
         randomSeed: () -> Int64 = {
@@ -101,13 +125,17 @@ public struct WorldCatalog: Sendable {
     }
 
     private func levelFields(in directory: URL) -> [String: NBTTag]? {
+        levelDocument(in: directory)?.tag.compoundValue?["Data"]?.compoundValue
+    }
+
+    private func levelDocument(in directory: URL) -> NBTDocument? {
         for filename in ["level.dat", "level.dat_old"] {
             guard let compressed = try? Data(contentsOf: directory.appendingPathComponent(filename)),
                 let data = try? NBTCompression.gzip.decompress(compressed),
                 let root = try? NBTCodec.decode(data),
-                let fields = root.tag.compoundValue?["Data"]?.compoundValue
+                root.tag.compoundValue?["Data"]?.compoundValue != nil
             else { continue }
-            return fields
+            return root
         }
         return nil
     }

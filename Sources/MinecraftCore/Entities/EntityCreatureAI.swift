@@ -111,7 +111,7 @@ extension EntitySimulation {
             if distance > 16384 {
                 entity.health = 0
                 entity.lootDropped = true
-                entity.deathTicks = 20
+                entity.deathTicks = 21
             }
             if entity.idleTicks > 600 && random.nextInt(bound: 800) == 0 {
                 if distance < 1024 {
@@ -119,7 +119,7 @@ extension EntitySimulation {
                 } else {
                     entity.health = 0
                     entity.lootDropped = true
-                    entity.deathTicks = 20
+                    entity.deathTicks = 21
                 }
             }
         }

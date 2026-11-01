@@ -118,6 +118,21 @@ public enum BlockPlacement {
         UInt8((Int(floor(yaw * 2 / .pi + 0.5)) + 2) & 3)
     }
 
+    static func resolvedPlacement(
+        kind: BlockKind, damage: UInt16, face: BlockPosition, yaw: Float, at p: BlockPosition,
+        world: BlockWorld
+    ) -> BlockState? {
+        let state = placementState(kind: kind, damage: damage, face: face, yaw: yaw)
+        if let state, canRemain(state, at: p, in: world) { return state }
+        let fallback: [UInt8]
+        switch kind {
+        case .torch, .redstoneTorch, .redstoneTorchOff: fallback = [1, 2, 3, 4, 5]
+        case .ladder: fallback = [2, 3, 4, 5]
+        default: return nil
+        }
+        return fallback.map { BlockState(kind, metadata: $0) }.first { canRemain($0, at: p, in: world) }
+    }
+
     static func placementState(kind: BlockKind, damage: UInt16, face: BlockPosition, yaw: Float)
         -> BlockState?
     {
@@ -125,7 +140,8 @@ public enum BlockPlacement {
         let quadrant = quadrant(yaw: yaw)
         switch kind {
         case .woodenStairs, .cobblestoneStairs: metadata = [2, 1, 3, 0][Int(quadrant)]
-        case .furnace, .dispenser, .chest: metadata = [2, 5, 3, 4][Int(quadrant)]
+        case .furnace, .burningFurnace, .dispenser: metadata = [2, 5, 3, 4][Int(quadrant)]
+        case .leaves: metadata |= 8
         case .pumpkin, .jackOLantern: metadata = quadrant
         case .piston, .stickyPiston: metadata = [2, 5, 3, 4][Int(quadrant)]
         case .repeaterOff, .repeaterOn: metadata = (quadrant + 2) & 3

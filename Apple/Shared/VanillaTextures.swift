@@ -10,7 +10,8 @@ struct VanillaTextures {
     let colorMaps: BlockColorMaps?
 
     init(device: MTLDevice) throws {
-        guard let url = Bundle.main.url(forResource: "terrain", withExtension: "png", subdirectory: "Vanilla")
+        guard let url = TextureResources.url(for: "terrain"),
+            let itemsURL = TextureResources.url(for: "gui/items")
         else {
             throw Renderer.SetupError.unavailable(
                 "Vanilla textures are missing. Run just assets before building.")
@@ -23,7 +24,7 @@ struct VanillaTextures {
                 .generateMipmaps: false,
             ])
         items = try MTKTextureLoader(device: device).newTexture(
-            URL: url.deletingLastPathComponent().appendingPathComponent("gui/items.png"),
+            URL: itemsURL,
             options: [.origin: MTKTextureLoader.Origin.topLeft, .SRGB: false, .generateMipmaps: false])
         if let grass = Self.loadColorMap("grasscolor"), let foliage = Self.loadColorMap("foliagecolor") {
             colorMaps = BlockColorMaps(grass: grass, foliage: foliage)
@@ -42,10 +43,10 @@ struct VanillaTextures {
         }
     }
 
-    static func loadRGBA(_ path: String) -> (width: Int, height: Int, pixels: [UInt8])? {
+    static func loadRGBA(_ path: String, fromPack: Bool = true) -> (width: Int, height: Int, pixels: [UInt8])?
+    {
         guard
-            let root = Bundle.main.resourceURL,
-            case let url = root.appendingPathComponent("Vanilla/\(path).png"),
+            let url = fromPack ? TextureResources.url(for: path) : TextureResources.vanillaURL(for: path),
             let source = CGImageSourceCreateWithURL(url as CFURL, nil),
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }

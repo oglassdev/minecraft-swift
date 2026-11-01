@@ -2,6 +2,43 @@ import MinecraftCore
 import simd
 
 enum EntityDecorationGeometry {
+    static func fire(entity: GameEntity, position: SIMD3<Float>, cameraYaw: Float) -> [BlockVertex] {
+        let scale = Float(entity.width) * 1.4
+        guard scale > 0 else { return [] }
+        var height = Float(entity.height) / scale
+        let baseZ = -Float(0.3) + Float(Int(height)) * 0.02
+        var width: Float = 0.5
+        var bottom: Float = 0
+        var z: Float = 0
+        var layer = 0
+        var vertices: [BlockVertex] = []
+        while height > 0 {
+            let tile = 31 + (layer & 1) * 16
+            var u0 = Float(tile & 15) / 16
+            var u1 = u0 + 15.99 / 256
+            let v0 = Float(tile >> 4) / 16
+            let v1 = v0 + 15.99 / 256
+            if layer / 2 & 1 == 0 { swap(&u0, &u1) }
+            let points = [
+                SIMD3(width, bottom, z + baseZ), SIMD3(-width, bottom, z + baseZ),
+                SIMD3(-width, bottom + 1.4, z + baseZ), SIMD3(width, bottom + 1.4, z + baseZ),
+            ]
+            let uv = [SIMD2(u1, v1), SIMD2(u0, v1), SIMD2(u0, v0), SIMD2(u1, v0)]
+            vertices += [0, 1, 2, 0, 2, 3].map { index in
+                BlockVertex(
+                    position: position
+                        + EntityModelPart.rotate(points[index] * scale, by: SIMD3(0, -cameraYaw - .pi, 0)),
+                    color: SIMD3(repeating: 1), uv: uv[index], light: 255)
+            }
+            height -= 0.45
+            bottom += 0.45
+            width *= 0.9
+            z += 0.03
+            layer += 1
+        }
+        return vertices
+    }
+
     static func painting(entity: GameEntity, position: SIMD3<Float>, world: BlockWorld) -> [BlockVertex] {
         guard let motive = BetaPainting.motive(named: entity.paintingMotive ?? "Kebab") else { return [] }
         let angle = Float(entity.paintingFacing) * .pi / 2
@@ -77,7 +114,7 @@ enum EntityDecorationGeometry {
     static func fishingLine(from hook: SIMD3<Float>, to hand: SIMD3<Float>, camera: Camera) -> [BlockVertex] {
         let start = hook + SIMD3(0, 0.25, 0)
         let difference = hand - start
-        let right = simd_normalize(simd_cross(camera.forward, SIMD3(0, 1, 0))) * 0.002
+        let right = SIMD3<Float>(cos(camera.yaw), 0, sin(camera.yaw)) * 0.002
         var vertices: [BlockVertex] = []
         for segment in 0..<16 {
             let a = Float(segment) / 16

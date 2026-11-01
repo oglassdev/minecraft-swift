@@ -103,7 +103,7 @@ extension EntitySimulation {
             hook.inGround = true
             return []
         }
-        let collided = EntityMotion.move(&hook, world: world)
+        let collided = EntityMotion.move(&hook, world: world, collisions: collisionView())
         let horizontal = Double(
             Float(sqrt(hook.velocity.x * hook.velocity.x + hook.velocity.z * hook.velocity.z)))
         let yaw = Float(atan2(hook.velocity.x, -hook.velocity.z))

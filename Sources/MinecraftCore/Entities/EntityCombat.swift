@@ -19,7 +19,8 @@ extension EntitySimulation {
                 eye: player.eyePositionDouble + SIMD3(0, Double(Float(0.12)), 0), bounds: player.bounds,
                 health: player.health)
         }
-        guard let entity = entities.first(where: { $0.id == id && $0.isLiving }) else { return nil }
+        guard let index = entityArrayIndex(id: id), entities[index].isLiving else { return nil }
+        let entity = entities[index]
         return LivingTarget(
             id: id, kind: entity.kind, position: entity.position, feet: entity.position,
             eye: entity.eyePosition,
@@ -45,8 +46,6 @@ extension EntitySimulation {
             if accepted {
                 player.knockBack(from: entity.position)
                 alertOwnedWolves(against: entity.id, from: player.eyePositionDouble, defending: true)
-                queuedEvents.append(
-                    .sound(name: "random.hurt", position: player.eyePositionDouble, volume: 1, pitch: 1))
             }
             return accepted
         }
@@ -110,8 +109,10 @@ extension EntitySimulation {
                 && entities[ally].bounds.intersects(area)
             {
                 entities[ally].targetEntityID = sourceID
-                entities[ally].angerTicks = 400 + random.nextInt(bound: 400)
-                entities[ally].specialTicks = random.nextInt(bound: 40)
+                var allyRandom = entityRandom(for: entities[ally].id)
+                entities[ally].angerTicks = 400 + allyRandom.nextInt(bound: 400)
+                entities[ally].specialTicks = allyRandom.nextInt(bound: 40)
+                entityRandoms[entities[ally].id] = allyRandom
             }
         }
     }

@@ -22,12 +22,13 @@ ignored local directory. Subsequent runs use that cache. The equivalent commands
 python3 Tools/import_assets.py
 python3 Tools/convert_audio.py
 xcodebuild -quiet -project Apple/MinecraftSwift.xcodeproj \
-  -scheme MinecraftMac -configuration Debug -destination 'platform=macOS' \
+  -scheme MinecraftMac -configuration Release -destination 'platform=macOS' \
   -derivedDataPath .build/apple CODE_SIGNING_ALLOWED=NO build
-open .build/apple/Build/Products/Debug/MinecraftSwift.app
+open .build/apple/Build/Products/Release/MinecraftSwift.app
 ```
 
-If Xcode reports a missing Metal toolchain, install it with
+The run command uses an optimized Release build. Debug builds retain expensive Swift
+checks and are intended for debugging. If Xcode reports a missing Metal toolchain, install it with
 `xcodebuild -downloadComponent MetalToolchain`. The checked-in Xcode project also works
 directly: select **MinecraftMac** and Run after importing assets.
 
@@ -47,9 +48,15 @@ Application Support directory. Options and statistics live beside `saves`.
 | Q | Drop selected item |
 | T / Return | Chat |
 | Escape | Close panel, release pointer, pause |
-| F | Development flight toggle |
+| F / Shift-F | Cycle fog distance |
+| F1 / F3 / F5 / F8 | Hide HUD, debug display, third-person view, smooth camera |
+| F2 / F11 | Screenshot, fullscreen |
+| Control-F | Development flight toggle |
 
 In inventory, click to move/merge a stack; right click splits a stack or places one item.
+Shift-click follows the original container transfer rules. Key bindings are editable in
+Options → Controls. Texture packs can be selected from the title screen; ZIP archives
+go in `~/Library/Application Support/MinecraftSwift/texturepacks/`.
 Flight uses Space to rise, Shift/Control to descend, and Option to move faster.
 
 ## iPhone
@@ -90,6 +97,8 @@ There are no third-party Swift dependencies.
 
 - Original 128-block Overworld and Nether generation, climate, caves, ores, trees,
   dungeons, vegetation, springs, population, and Far Lands arithmetic.
+- Original bitmap menus, integer GUI scaling, HUD, inventory/crafting/container clicks,
+  achievements, chat, death/pause screens, controls, and local texture-pack selection.
 - Fixed 20 Hz player/entity simulation, collision, damage, armor, survival inventory,
   crafting/smelting, fluids, fire, growth, redstone, rails, pistons, and containers.
 - Source atlas selections and special block geometry, smooth lighting, fog, day/night,
@@ -104,19 +113,30 @@ There are no third-party Swift dependencies.
 The tests compare against original Java outputs for terrain/population hashes, portals,
 light arrays, block textures, packet bytes, movement, item/map behavior, NBT, and other
 selected mechanics. These checks establish the sampled behavior; they do not establish
-complete game parity. Mob AI and shared random/tick ordering still have differences,
-some rendering/UI details remain approximate, and legacy online authentication is not
-implemented. Physical iPhone performance, Linux execution, touch gestures, and physical
-relative mouse input remain unverified.
+complete game parity. Remaining differences include some mob AI/animation details,
+particle simulation, menu scrolling/diagnostics, asynchronous world population random
+ordering, some nested block callbacks, and legacy online authentication. Anaglyph and
+Advanced OpenGL are unavailable. Physical iPhone performance, Linux execution, and
+physical relative mouse input still require verification; mobile controls retain the
+existing touch implementation.
 
-Verified November 1, 2026 with Swift 6.3.3 and Xcode 26.6: all 129 core tests and strict
-formatting pass; macOS and iOS Simulator builds pass. The macOS app rendered generated
-terrain, restored inventory, accepted movement/inventory controls, unlocked an
-achievement, streamed Far-distance terrain, and saved on quit. The iPhone 17 Pro
-simulator rendered generated terrain and wrote a world save. Both ran with Metal API
-validation without reported Metal errors; simulator gesture automation was unreliable.
-The original-server offline loopback also passed joining, chat, chunk/entity updates,
-inventory transactions/crafting, and restoration of singleplayer state.
+Verified November 1, 2026 with Swift 6.3.3 and Xcode 26.6: all 167 core tests and
+strict formatting pass; the unified macOS Release and iOS Simulator builds pass.
+The macOS scene sustained approximately 118–120 FPS at 854×480 points in the existing
+forest save with more than 250 entities. Native checks covered movement, inventory
+right-click splitting/merging, Shift-click transfers, F1/F3/F5, and saving. The entity
+benchmark matches the pose/velocity/yaw/health/age digest and event count after
+replacing repeated full entity scans with an ordered spatial index. Its 400-entity
+Release workload fell from 18.02 to 2.20 ms per tick; Debug fell from 215.79 to
+26.14 ms per tick, with simulation rates and mob caps preserved. Source oracle checks also cover all font
+metrics, 328 container slot positions, 216 sky-color cases, and 25,872 cloud vertices.
+These are sampled checks, not a claim of complete 1:1 behavior. The original-server loopback passed joining, chat, inventory split/crafting transactions,
+remote player and arrow interpolation, singleplayer restoration, and death-to-title
+overlay cleanup. The 36-pose arrow oracle matches all 1,296 vertices within 0.000001;
+offscreen Metal checks render inventory icons and the player at GUI scales 1–4. The revised iOS app
+loaded a saved world and rendered the shared scene under Metal API validation;
+simulator touch automation remained unreliable. F2 screenshot
+capture and physical relative mouse behavior still need manual verification.
 
 The longer spring-generation regression loads 1,089 chunks and populates 900 on a
 512 KiB cooperative thread stack. Run it separately with:

@@ -72,45 +72,6 @@ public enum BlockPower {
         return false
     }
 
-    static func recalculateWires(around positions: [BlockPosition], world: inout BlockWorld)
-        -> [BlockPosition]
-    {
-        var network: Set<BlockPosition> = []
-        var queue = positions
-        while let p = queue.popLast() {
-            guard world[p] == .redstoneWire, network.insert(p).inserted else { continue }
-            queue += wireNeighbors(of: p, world: world)
-        }
-        var levels: [BlockPosition: UInt8] = [:]
-        var powered: [BlockPosition] = []
-        for p in network where isPowered(at: p, in: world, includeWire: false) {
-            levels[p] = 15
-            powered.append(p)
-        }
-        var index = 0
-        while index < powered.count {
-            let p = powered[index]
-            index += 1
-            let next = (levels[p] ?? 0) - 1
-            if next == 0 { continue }
-            for neighbor in wireNeighbors(of: p, world: world) where network.contains(neighbor) {
-                if next > (levels[neighbor] ?? 0) {
-                    levels[neighbor] = next
-                    powered.append(neighbor)
-                }
-            }
-        }
-        var changed: [BlockPosition] = []
-        for p in network.sorted(by: ordered) {
-            let level = levels[p] ?? 0
-            if world.state(at: p)?.metadata != level {
-                world.setBlock(BlockState(.redstoneWire, metadata: level), at: p)
-                changed.append(p)
-            }
-        }
-        return changed
-    }
-
     private static func emits(
         _ state: BlockState, at p: BlockPosition, side: Int, strong: Bool,
         world: BlockWorld, includeWire: Bool
@@ -183,28 +144,6 @@ public enum BlockPower {
         case .repeaterOff, .repeaterOn: return side == [2, 3, 0, 1][Int(state.metadata & 3)]
         default: return false
         }
-    }
-
-    private static func wireNeighbors(of p: BlockPosition, world: BlockWorld) -> [BlockPosition] {
-        var neighbors: [BlockPosition] = []
-        for offset in BlockPosition.horizontal {
-            let neighbor = p.adding(offset)
-            if world[neighbor] == .redstoneWire { neighbors.append(neighbor) }
-            let vertical = neighbor.adding(
-                BlockPosition(0, world[neighbor]?.isNormalCube == true ? 1 : -1, 0))
-            if world[vertical] == .redstoneWire
-                && (vertical.y <= p.y || world[p.adding(BlockPosition(0, 1, 0))]?.isNormalCube != true)
-            {
-                neighbors.append(vertical)
-            }
-        }
-        return neighbors
-    }
-
-    private static func ordered(_ a: BlockPosition, _ b: BlockPosition) -> Bool {
-        if a.x != b.x { return a.x < b.x }
-        if a.y != b.y { return a.y < b.y }
-        return a.z < b.z
     }
 }
 

@@ -31,34 +31,20 @@ extension GameSession {
         saveWorld { [weak self] in
             guard let self else { return }
             self.worldTransitionPending = false
-            self.streamingTask?.cancel()
-            self.sessionGeneration &+= 1
+            self.invalidateWorldTasks()
             self.worldDirectory = descriptor.directory
             self.service = WorldService(
                 directory: descriptor.directory, newWorldSeed: descriptor.seed, newWorldName: descriptor.name)
-            self.streaming = false
-            self.relighting = false
-            self.evictionInProgress = false
             self.isLoading = true
             self.isPaused = false
             self.worldMenuOpen = false
-            self.inventoryOpen = false
-            self.chatOpen = false
-            self.signEditorOpen = false
-            self.currentContainer = nil
-            self.currentContainerEntity = nil
-            self.containerPositions = []
-            self.cursor = nil
-            self.crafting = CraftingGrid()
-            self.craftingWidth = 2
+            self.closeScreens()
             self.portalTicks = 0
             self.portalCooldown = 0
-            self.sleepTicks = 0
-            self.sleepingBed = nil
             self.errorMessage = nil
-            self.statusText = "Loading \(descriptor.name)…"
             self.particleEvents.removeAll()
             self.audio.playRecord(nil)
+            self.syncAudioPause()
             Task {
                 await self.loadWorld()
                 if descriptor.isNew, !self.isLoading { self.saveWorld() }
@@ -67,11 +53,9 @@ extension GameSession {
     }
 
     func convertWorld(_ descriptor: WorldDescriptor) {
-        streamingTask?.cancel()
-        sessionGeneration &+= 1
+        invalidateWorldTasks()
         let generation = sessionGeneration
         isLoading = true
-        statusText = "Converting \(descriptor.name)…"
         Task {
             do {
                 _ = try await Task.detached {
@@ -79,13 +63,13 @@ extension GameSession {
                         [weak self] progress in
                         Task { @MainActor in
                             guard let self, self.sessionGeneration == generation else { return }
-                            self.statusText =
-                                "Converting \(descriptor.name)… \(Int(progress.fractionCompleted * 100))%"
+                            self.loadingProgress = progress.fractionCompleted
                         }
                     }
                 }.value
                 guard sessionGeneration == generation else { return }
                 isLoading = false
+                loadingProgress = nil
                 refreshWorldList()
                 if let converted = availableWorlds.first(where: { $0.directory == descriptor.directory }) {
                     openWorld(converted)
@@ -93,6 +77,7 @@ extension GameSession {
             } catch {
                 guard sessionGeneration == generation else { return }
                 isLoading = false
+                loadingProgress = nil
                 errorMessage = "Could not convert world: \(error.localizedDescription)"
             }
         }
@@ -104,8 +89,15 @@ extension GameSession {
         resetInput()
         returnCursorAndCrafting()
         saveWorld { [weak self] in
-            self?.worldMenuOpen = true
-            self?.refreshWorldList()
+            guard let self else { return }
+            self.worldMenuOpen = true
+            self.showDeathScreen = false
+            self.deathScreenTicks = 0
+            self.inventoryOpen = false
+            self.chatOpen = false
+            self.signEditorOpen = false
+            self.syncAudioPause()
+            self.refreshWorldList()
         }
     }
 
@@ -132,19 +124,48 @@ extension GameSession {
 
     func dropSelectedItem() {
         guard !inventoryOpen, !isPaused, !isLoading else { return }
-        statistics.recordDrop()
         if isMultiplayer {
             multiplayer?.client?.send(.dig(status: 4, position: BlockPosition(0, 0, 0), face: 0))
         } else if let item = inventory.removeSelected() {
-            let position = player.eyePositionDouble - SIMD3(0, 0.3, 0)
-            let id = entitySimulation.spawn(
-                kind: "item", position: position,
-                velocity: SIMD3<Double>(camera.forward) * 0.3 + SIMD3(0, 0.1, 0))
-            entitySimulation.update(id: id) {
-                $0.itemStack = item
-                $0.pickupDelay = 40
-            }
+            dropFromPlayer(item)
         }
         refreshHUD()
+    }
+}
+
+extension GameSession {
+    func renameWorld(_ descriptor: WorldDescriptor, name: String) {
+        guard !worldTransitionPending else { return }
+        worldTransitionPending = true
+        let catalog = WorldCatalog(directory: gameDirectory.appendingPathComponent("saves"))
+        Task {
+            defer { worldTransitionPending = false }
+            await service.flush()
+            do {
+                try await Task.detached { try catalog.rename(descriptor, name: name) }.value
+                if descriptor.directory == worldDirectory { worldName = name }
+                refreshWorldList()
+            } catch { errorMessage = "Could not rename world: \(error.localizedDescription)" }
+        }
+    }
+
+    func deleteWorld(_ descriptor: WorldDescriptor) {
+        guard !worldTransitionPending else { return }
+        worldTransitionPending = true
+        let catalog = WorldCatalog(directory: gameDirectory.appendingPathComponent("saves"))
+        Task {
+            defer { worldTransitionPending = false }
+            await service.flush()
+            do {
+                try await Task.detached { try catalog.delete(descriptor) }.value
+                if descriptor.directory == worldDirectory {
+                    invalidateWorldTasks()
+                    hasLoadedWorld = false
+                    showDeathScreen = false
+                    world = BlockWorld()
+                }
+                refreshWorldList()
+            } catch { errorMessage = "Could not delete world: \(error.localizedDescription)" }
+        }
     }
 }

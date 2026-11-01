@@ -54,8 +54,9 @@ extension EntitySimulation {
                     let yaw = entities[index].yaw
                     let pitch = entities[index].pitch
                     entities[index].health = 0
-                    entities[index].deathTicks = 20
+                    entities[index].deathTicks = 21
                     entities[index].lootDropped = true
+                    refreshSpatialBody(at: index)
                     let id = spawn(kind: "pigZombie", position: position)
                     update(id: id) {
                         $0.yaw = yaw
@@ -71,7 +72,8 @@ extension EntitySimulation {
                 }
                 entities[index].velocity = velocity
                 if entities[index].kind == "creeper" { entities[index].metadata |= 1 }
-                entities[index].fireTicks = max(300, entities[index].fireTicks + 1)
+                entities[index].fireTicks += 1
+                if entities[index].fireTicks == 0 { entities[index].fireTicks = 300 }
             }
         }
         effectRandoms[bolt.id] = bolt.health > 0 ? generator : nil

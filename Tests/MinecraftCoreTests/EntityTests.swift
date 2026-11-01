@@ -87,15 +87,15 @@ import Testing
         let id = simulation.spawn(kind: "squid", position: SIMD3(10, 64, 10))
         simulation.update(id: id) { $0.squidPhaseVelocity = 0.2 }
         simulation.random = JavaRandom(seed: 1234)
-        var player = Player(position: SIMD3(1000, 64, 1000))
-        var inventory = PlayerInventory()
+        var squid = simulation.entities[0]
         for tick in 1...32 {
-            _ = simulation.tick(world: &world, player: &player, inventory: &inventory, time: Int64(tick))
+            squid.previousPosition = squid.position
+            _ = simulation.tickSquid(&squid, world: world)
             if tick == 12 {
-                #expect(abs(simulation.entities[0].squidTentacleAngle - 0.758473754) < 0.0000001)
+                #expect(abs(squid.squidTentacleAngle - 0.758473754) < 0.0000001)
             }
         }
-        let entity = simulation.entities[0]
+        let entity = squid
         #expect(
             EntityMotion.squaredLength(
                 entity.position - SIMD3(8.697950599715114, 63.22716648452923, 11.55270648561418))
@@ -108,10 +108,12 @@ import Testing
         var simulation = EntitySimulation(seed: 1234, naturalSpawningEnabled: false)
         simulation.shoot(
             kind: "arrow", origin: SIMD3(0.5, 3, 0.5), direction: SIMD3(0.3, 0.4, -0.5), speed: 0.6,
-            inaccuracy: 12)
+            inaccuracy: 12, randomSeed: 1234)
         let expected = SIMD3(0.2621810460613616, 0.3628828545068006, -0.36278660297994214)
         #expect(
             EntityMotion.squaredLength(simulation.entities[0].velocity - expected) < 0.00000000000000000001)
+        #expect(simulation.entities[0].previousYaw == simulation.entities[0].yaw)
+        #expect(simulation.entities[0].previousPitch == simulation.entities[0].pitch)
         var world = floorWorld()
         world.setBlock(BlockState(.rail), at: BlockPosition(0, 1, 0))
         var player = Player(position: SIMD3(30, 1, 30))
@@ -151,12 +153,12 @@ import Testing
     }
 
     @Test func ghastFlightMatchesOriginalControlledAirTrace() {
-        var world = BlockWorld()
-        var player = Player(position: SIMD3(1000, 64, 1000))
-        var inventory = PlayerInventory()
+        let world = BlockWorld()
+        let player = Player(position: SIMD3(1000, 64, 1000))
         var simulation = EntitySimulation(seed: 0, naturalSpawningEnabled: false)
         simulation.spawn(kind: "ghast", position: SIMD3(10, 64, 10))
         simulation.random = JavaRandom(seed: 1234)
+        var ghast = simulation.entities[0]
         let positions: [SIMD3<Double>] = [
             SIMD3(9.984743044642123, 63.902355485709585, 9.984743044642123),
             SIMD3(9.970859214866325, 63.813498975144476, 9.970859214866325),
@@ -164,9 +166,10 @@ import Testing
             SIMD3(9.999849061473473, 63.574641930632424, 10.109617708520574),
             SIMD3(10.040441192443026, 63.4277027308696, 10.255409908418034),
         ]
-        for (tick, expected) in positions.enumerated() {
-            _ = simulation.tick(world: &world, player: &player, inventory: &inventory, time: Int64(tick))
-            let delta = simulation.entities[0].position - expected
+        for expected in positions {
+            ghast.previousPosition = ghast.position
+            _ = simulation.tickGhast(&ghast, world: world, player: player)
+            let delta = ghast.position - expected
             #expect(EntityMotion.squaredLength(delta) < 0.00000000000000000001)
         }
     }
@@ -184,13 +187,14 @@ import Testing
         var dead = GameEntity(id: 100, kind: "slime", position: SIMD3(2, 1, 2))
         dead.metadata = 4
         dead.health = 0
-        dead.deathTicks = 19
+        dead.deathTicks = 20
         dead.lootDropped = true
         simulation.restore([dead])
         _ = simulation.tick(world: &world, player: &player, inventory: &inventory, time: 11)
         #expect(simulation.entities.count == 4)
         #expect(simulation.entities.allSatisfy { $0.metadata == 2 && $0.health == 4 })
-        #expect(Set(simulation.entities.map { $0.position.x }) == [1.5, 2.5])
+        #expect(Set(simulation.entities.map { $0.previousPosition.x }) == [1.5, 2.5])
+        #expect(simulation.entities.allSatisfy { $0.ageTicks == 1 })
         dead.health = -1
         simulation.restore([dead])
         _ = simulation.tick(world: &world, player: &player, inventory: &inventory, time: 12)

@@ -19,7 +19,12 @@ public struct PlayerInventory: Codable, Equatable, Sendable {
     @discardableResult
     public mutating func insert(_ stack: ItemStack) -> ItemStack? {
         guard stack.count > 0 else { return nil }
-        guard stack.definition != nil else { return stack }
+        guard let definition = stack.definition else { return stack }
+        if definition.maximumDurability > 0 && stack.damage > 0 {
+            guard let index = slots.firstIndex(where: { $0 == nil }) else { return stack }
+            slots[index] = stack
+            return nil
+        }
         var remaining = stack
         for index in slots.indices {
             guard var existing = slots[index], existing.canStack(with: remaining) else { continue }

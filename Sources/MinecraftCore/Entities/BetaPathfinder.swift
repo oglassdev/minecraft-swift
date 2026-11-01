@@ -32,15 +32,22 @@ enum BetaPathfinder {
     }
 
     private struct Search {
+        static let offsets = [
+            BlockPosition(0, 0, 1), BlockPosition(-1, 0, 0), BlockPosition(1, 0, 0), BlockPosition(0, 0, -1),
+        ]
+
         let world: BlockWorld
-        let entity: GameEntity
+        let width: Double
+        let origin: SIMD3<Double>
         let volume: BlockPosition
         var nodes: [Int32: Node] = [:]
+        var cachedChunk: Chunk?
         var heap: [Node] = []
 
         init(world: BlockWorld, entity: GameEntity) {
             self.world = world
-            self.entity = entity
+            width = entity.width
+            origin = entity.bounds.min
             volume = BlockPosition(
                 Int(floor(Float(entity.width) + 1)), Int(floor(Float(entity.height) + 1)),
                 Int(floor(Float(entity.width) + 1)))
@@ -49,9 +56,8 @@ enum BetaPathfinder {
         mutating func find(toward target: SIMD3<Double>, range: Float) -> [BlockPosition] {
             let start = node(
                 BlockPosition(
-                    Int(floor(entity.bounds.min.x)), Int(floor(entity.bounds.min.y)),
-                    Int(floor(entity.bounds.min.z))))
-            let radius = Double(Float(entity.width) / 2)
+                    Int(floor(origin.x)), Int(floor(origin.y)), Int(floor(origin.z))))
+            let radius = Double(Float(width) / 2)
             let goal = node(
                 BlockPosition(
                     Int(floor(target.x - radius)), Int(floor(target.y)), Int(floor(target.z - radius))))
@@ -67,10 +73,7 @@ enum BetaPathfinder {
                     verticalType(
                         BlockPosition(current.position.x, current.position.y + 1, current.position.z)) == 1
                     ? 1 : 0
-                for offset in [
-                    BlockPosition(0, 0, 1), BlockPosition(-1, 0, 0), BlockPosition(1, 0, 0),
-                    BlockPosition(0, 0, -1),
-                ] {
+                for offset in Self.offsets {
                     let position = BlockPosition(
                         current.position.x + offset.x, current.position.y, current.position.z + offset.z)
                     guard let next = safePoint(position, step: step), !next.closed,
@@ -123,11 +126,16 @@ enum BetaPathfinder {
             return result
         }
 
-        func verticalType(_ position: BlockPosition) -> Int {
+        mutating func state(at position: BlockPosition) -> BlockState? {
+            if cachedChunk?.position != position.chunk { cachedChunk = world.chunks[position.chunk] }
+            return cachedChunk?[position.x & 15, position.y, position.z & 15]
+        }
+
+        mutating func verticalType(_ position: BlockPosition) -> Int {
             for x in position.x..<(position.x + volume.x) {
                 for y in position.y..<(position.y + volume.y) {
                     for z in position.z..<(position.z + volume.z) {
-                        guard let state = world.state(at: BlockPosition(x, y, z)) else { continue }
+                        guard let state = state(at: BlockPosition(x, y, z)) else { continue }
                         if state.kind == .woodenDoor || state.kind == .ironDoor {
                             if state.metadata & 4 == 0 { return 0 }
                         } else {

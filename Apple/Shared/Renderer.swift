@@ -14,15 +14,22 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let mapPipeline: MTLRenderPipelineState
     private let writeDepth: MTLDepthStencilState
     private let readDepth: MTLDepthStencilState
-    private let textures: VanillaTextures
+    private var textures: VanillaTextures
     private let skyRenderer: SkyRenderer
     private let entityRenderer: EntityRenderer
     private let firstPersonRenderer: FirstPersonRenderer
     private let effectsRenderer: WorldEffectsRenderer
+    private let overlays: ScreenOverlays
     private var textureAnimation = LiquidTextureAnimation()
     private var itemTextureAnimation = ItemTextureAnimation()
     private let session: GameSession
     private var previousTime: CFTimeInterval?
+    private var fpsTime: CFTimeInterval?
+    private var framesSinceFPSReport = 0
+    private var lastPresentationTick: Int?
+    private var previousFogBrightness: Float = 0
+    private var fogBrightness: Float = 0
+    private var texturePackRevision: UInt64
     private var meshes: [ChunkPosition: ChunkMesh] = [:]
     private var cachedWorldSeed: Int64?
     private var cachedWorldRevision: UInt64?
@@ -33,7 +40,6 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var meshScheduleCounter: UInt64 = 0
     private var meshJobs: [ChunkPosition: Task<Void, Never>] = [:]
     private var readyMeshes: [MeshResult] = []
-    private var renderMotion = RenderMotion()
     private var breakingCache:
         (position: BlockPosition, revision: UInt64, stage: Int, buffer: MTLBuffer?, count: Int)?
 
@@ -66,6 +72,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         let cutout: [BlockVertex]
         let translucent: [BlockVertex]
         let centers: [SIMD3<Float>]
+    }
+
+    private struct VisibleChunk {
+        let position: ChunkPosition
+        let mesh: ChunkMesh
+        let distance: Double
+        let offset: SIMD3<Float>
     }
 
     private struct MeshCandidate {
@@ -143,17 +156,23 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         self.writeDepth = writeDepth
         self.readDepth = readDepth
+        TextureResources.configure(overrideURL: session.texturePackURL, revision: session.texturePackRevision)
         let textures = try VanillaTextures(device: device)
         self.textures = textures
+        try InventoryRenderImages.shared.configure(
+            device: device, atlas: textures.atlas, library: library, queue: queue)
         self.skyRenderer = try SkyRenderer(
             device: device, library: library, colorFormat: view.colorPixelFormat)
         self.entityRenderer = EntityRenderer(device: device, atlas: textures.atlas, items: textures.items)
         self.firstPersonRenderer = FirstPersonRenderer(
             device: device, atlas: textures.atlas, items: textures.items)
         self.effectsRenderer = WorldEffectsRenderer(device: device, atlas: textures.atlas)
+        self.overlays = try ScreenOverlays(
+            device: device, library: library, atlas: textures.atlas, colorFormat: view.colorPixelFormat)
         self.device = device
         self.queue = queue
         self.session = session
+        self.texturePackRevision = session.texturePackRevision
         super.init()
         view.delegate = self
     }
@@ -162,13 +181,22 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         let now = CACurrentMediaTime()
-        let delta = Float(min(now - (previousTime ?? now), 0.25))
+        let delta = Float(min(now - (previousTime ?? now), 1))
         previousTime = now
         session.update(deltaTime: delta)
+        reloadTexturePackIfNeeded()
         guard view.drawableSize.width > 0, view.drawableSize.height > 0,
             let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
             let commandBuffer = queue.makeCommandBuffer()
         else { return }
+        framesSinceFPSReport += 1
+        if let fpsTime, now - fpsTime >= 1 {
+            session.fps = Int((Double(framesSinceFPSReport) / (now - fpsTime)).rounded())
+            framesSinceFPSReport = 0
+            self.fpsTime = now
+        } else if fpsTime == nil {
+            fpsTime = now
+        }
 
         if session.isLoading || session.worldMenuOpen {
             if cachedWorldSeed != nil {
@@ -194,25 +222,57 @@ final class Renderer: NSObject, MTKViewDelegate {
         #endif
         let targetFPS = [maximumFPS, 120, 40][min(2, max(0, options.fpsLimit))]
         if view.preferredFramesPerSecond != targetFPS { view.preferredFramesPerSecond = targetFPS }
-        let cameraPosition = session.cameraPositionDouble
+        let eyePosition = session.cameraPositionDouble
+        let partial = session.renderPartialTick
+        let portal = session.previousPortalTime + (session.portalTime - session.previousPortalTime) * partial
+        let advancedTicks = min(10, max(0, session.tickCount - (lastPresentationTick ?? session.tickCount)))
+        lastPresentationTick = session.tickCount
+        let textureDelta = Float(advancedTicks) / 20
+        firstPersonRenderer.advance(
+            heldItem: session.heldItem, slot: session.inventory.selectedHotbar, ticks: advancedTicks)
+        let sleeping = session.sleepingBed != nil
+        let thirdPerson = session.thirdPerson && !sleeping
+        var frameCamera = session.camera
+        let cameraPosition: SIMD3<Double>
+        if let bed = session.sleepingBed {
+            frameCamera = Camera(
+                position: .zero,
+                yaw: Float((session.world.state(at: bed)?.metadata ?? 0) & 3) * BetaVisualMath.pi / 2,
+                pitch: 0)
+            cameraPosition = eyePosition + SIMD3(0, 0.12, 0)
+        } else {
+            cameraPosition =
+                thirdPerson
+                ? RenderMotion.thirdPersonPosition(
+                    world: session.world, eye: eyePosition, forward: frameCamera.forward) : eyePosition
+        }
         let origin = SIMD3<Double>(floor(cameraPosition.x / 16) * 16, 0, floor(cameraPosition.z / 16) * 16)
-        var camera = session.camera
+        var camera = frameCamera
         camera.setPosition(Self.relative(cameraPosition, to: origin))
         textureAnimation.encode(
-            deltaTime: delta, device: device, atlas: textures.atlas, commandBuffer: commandBuffer)
+            deltaTime: textureDelta, device: device, atlas: textures.atlas, commandBuffer: commandBuffer)
         itemTextureAnimation.encode(
-            delta: delta, compassAngle: session.compassAngle,
+            delta: textureDelta, compassAngle: session.compassAngle,
             clockAngle: session.clockAngle, device: device, atlas: textures.items,
             commandBuffer: commandBuffer)
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         let aspect = Float(view.drawableSize.width / view.drawableSize.height)
         let renderDistance = Float(256 >> min(3, max(0, options.renderDistance)))
-        let bobbing = renderMotion.update(
-            position: cameraPosition, velocity: session.player.velocity,
-            onGround: session.player.onGround, alive: session.player.health > 0, delta: delta,
-            enabled: options.viewBobbing)
+        let water = session.player.isEyeUnderwater(in: session.world)
+        let lava = session.player.isEyeInLava(in: session.world)
+        var fov: Float = water ? 60 : 70
+        if session.player.health <= 0 {
+            fov /= (1 - 500 / (Float(session.player.deathTime) + partial + 500)) * 2 + 1
+        }
+        let bobbing = RenderMotion.bobbing(
+            player: session.player, partial: partial, enabled: options.viewBobbing)
+        let hurt = RenderMotion.hurt(player: session.player, partial: partial)
+        let portalTransform = RenderMotion.portal(amount: portal, time: Float(session.tickCount) + partial)
+        let cameraEffects = hurt * bobbing * portalTransform
+        let projection = Self.perspective(aspect: aspect, far: renderDistance * 2, fov: fov)
         let matrix =
-            Self.perspective(aspect: aspect, far: renderDistance * 2) * bobbing
+            projection * cameraEffects
+            * (thirdPerson || sleeping
+                ? matrix_identity_float4x4 : HeldItemGeometry.translation(SIMD3(0, 0, -0.1)))
             * Self.viewMatrix(camera: camera)
         let frustum = RenderFrustum(matrix: matrix)
         refreshMeshes(
@@ -220,103 +280,135 @@ final class Renderer: NSObject, MTKViewDelegate {
             options: BlockMeshOptions(
                 smoothLighting: options.smoothLighting, fancyLeaves: options.fancyGraphics))
         let climate = session.world.climate(
-            atX: Int(floor(cameraPosition.x)), z: Int(floor(cameraPosition.z)))
+            atX: Int(floor(eyePosition.x)), z: Int(floor(eyePosition.z)))
         let nether = session.world.dimension == -1
         let sky = BetaSkyState(
             time: session.worldTime, temperature: climate.temperature,
-            rain: nether ? 0 : session.rainStrength, thunder: nether ? 0 : session.thunderStrength)
-        let cameraBlock = session.world[
-            BlockPosition(
-                Int(floor(cameraPosition.x)), Int(floor(cameraPosition.y)), Int(floor(cameraPosition.z)))]
-        let water = cameraBlock == .water || cameraBlock == .stillWater
-        let lava = cameraBlock == .lava || cameraBlock == .stillLava
+            rain: nether ? 0 : session.rainStrength, thunder: nether ? 0 : session.thunderStrength,
+            partialTick: partial, lightningFlash: session.weather.lightningFlashTicks)
+        let fogLight = session.world.light(
+            at: BlockPosition(Int(floor(eyePosition.x)), Int(floor(eyePosition.y)), Int(floor(eyePosition.z)))
+        )
+        let lightBrightness = BetaLighting.brightness(
+            level: max(Int(fogLight.sky) - (nether ? 0 : Int(sky.skySubtraction)), Int(fogLight.block)),
+            ambient: nether ? 0.1 : 0.05)
+        let distanceBrightness = Float(3 - min(3, max(0, options.renderDistance))) / 3
+        let targetFogBrightness = lightBrightness * (1 - distanceBrightness) + distanceBrightness
+        for _ in 0..<advancedTicks {
+            previousFogBrightness = fogBrightness
+            fogBrightness += (targetFogBrightness - fogBrightness) * 0.1
+        }
+        let fogDimming = previousFogBrightness + (fogBrightness - previousFogBrightness) * partial
         let fogColor: SIMD3<Float>
         if water {
-            fogColor = SIMD3(0.02, 0.02, 0.2)
+            fogColor = SIMD3(0.02, 0.02, 0.2) * fogDimming
         } else if lava {
-            fogColor = SIMD3(0.6, 0.1, 0)
+            fogColor = SIMD3(0.6, 0.1, 0) * fogDimming
         } else if nether {
-            fogColor = SIMD3(0.2, 0.03, 0.03)
+            fogColor = SIMD3(0.2, 0.03, 0.03) * fogDimming
         } else {
-            fogColor = sky.fogColor
+            fogColor = sky.renderFogColor(distanceOption: options.renderDistance, brightness: fogDimming)
         }
         let fogEnd = fogDistance(position: cameraPosition, configuredDistance: renderDistance)
         var uniforms = Uniforms(
             viewProjection: matrix, renderOffset: .zero, cameraPosition: camera.position,
-            fogColor: fogColor, fogStart: nether ? 0 : fogEnd * 0.6, fogEnd: fogEnd,
+            fogColor: fogColor, fogStart: nether ? 0 : fogEnd * 0.25, fogEnd: fogEnd,
             skySubtraction: nether ? 0 : sky.skySubtraction,
             fogDensity: water ? 0.1 : (lava ? 2 : 0), ambientFloor: nether ? 0.1 : 0.05
         )
+        pass.colorAttachments[0].clearColor = MTLClearColor(
+            red: Double(fogColor.x), green: Double(fogColor.y), blue: Double(fogColor.z), alpha: 0)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         skyRenderer.draw(
-            encoder: encoder, camera: camera, aspect: aspect, matrix: matrix,
-            state: sky, time: session.worldTime, fogColor: fogColor, origin: origin,
-            visible: !water && !lava && !nether)
+            encoder: encoder, center: Self.relative(eyePosition, to: origin), matrix: matrix, state: sky,
+            fogColor: fogColor, fogEnd: fogEnd, visible: !nether && options.renderDistance < 2)
         encoder.setRenderPipelineState(opaquePipeline)
         encoder.setDepthStencilState(writeDepth)
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise)
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
         encoder.setFragmentTexture(textures.atlas, index: 0)
-        let visibleChunks = meshes.keys.filter { frustum.contains(chunk: $0, origin: origin) }
-            .filter {
-                Self.distanceSquared(chunk: $0, camera: cameraPosition)
-                    < Double(renderDistance * renderDistance)
-            }
-        for position in visibleChunks {
-            guard let mesh = meshes[position] else { continue }
-            uniforms.renderOffset = Self.relative(
-                SIMD3(Double(position.x * 16), 0, Double(position.z * 16)), to: origin)
+        func bind(offset: SIMD3<Float>) {
+            uniforms.renderOffset = offset
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            draw(buffer: mesh.opaque, count: mesh.opaqueCount, encoder: encoder)
+        }
+        let squaredRenderDistance = Double(renderDistance * renderDistance)
+        var visible: [VisibleChunk] = []
+        for (position, mesh) in meshes where frustum.contains(chunk: position, origin: origin) {
+            let distance = Self.distanceSquared(chunk: position, camera: cameraPosition)
+            guard distance < squaredRenderDistance else { continue }
+            visible.append(
+                VisibleChunk(
+                    position: position, mesh: mesh, distance: distance,
+                    offset: Self.relative(
+                        SIMD3(Double(position.x * 16), 0, Double(position.z * 16)), to: origin)))
+        }
+        for chunk in visible {
+            bind(offset: chunk.offset)
+            draw(buffer: chunk.mesh.opaque, count: chunk.mesh.opaqueCount, encoder: encoder)
         }
         encoder.setCullMode(.none)
-        for position in visibleChunks {
-            guard let mesh = meshes[position] else { continue }
-            uniforms.renderOffset = Self.relative(
-                SIMD3(Double(position.x * 16), 0, Double(position.z * 16)), to: origin)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            draw(buffer: mesh.cutout, count: mesh.cutoutCount, encoder: encoder)
+        for chunk in visible {
+            bind(offset: chunk.offset)
+            draw(buffer: chunk.mesh.cutout, count: chunk.mesh.cutoutCount, encoder: encoder)
         }
-        uniforms.renderOffset = .zero
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        bind(offset: .zero)
+        var renderedEntities = session.entities
+        if thirdPerson {
+            var local = GameEntity(id: Int64.min, kind: "player", position: session.player.position)
+            local.previousPosition = session.player.previousPosition
+            local.yaw = session.camera.yaw
+            local.pitch = session.camera.pitch
+            local.previousYaw = local.yaw
+            local.previousPitch = local.pitch
+            local.bodyYawDegrees = local.yaw * 180 / BetaVisualMath.pi + 180
+            local.previousBodyYawDegrees = local.bodyYawDegrees
+            local.limbSwing = session.player.walkedDistance / 0.6 * 4
+            local.limbSwingAmount = min(
+                1,
+                simd_length(SIMD2<Float>(Float(session.player.velocity.x), Float(session.player.velocity.z)))
+                    * 4)
+            local.previousLimbSwingAmount = local.limbSwingAmount
+            local.contents = [session.heldItem] + session.inventory.armor
+            local.remoteFlags = session.player.isSneaking ? 2 : 0
+            local.health = session.player.health
+            local.fireTicks = session.player.fireTicks
+            local.hurtTicks = session.player.hurtTime
+            local.deathTicks = session.player.deathTime
+            local.onGround = session.player.onGround
+            local.ageTicks = session.tickCount
+            renderedEntities.append(local)
+        }
         entityRenderer.draw(
-            encoder: encoder, entities: session.entities, world: session.world,
+            encoder: encoder, entities: renderedEntities, world: session.world,
             camera: camera, origin: origin, now: now, opaquePipeline: opaquePipeline,
             transparentPipeline: transparentPipeline,
             additivePipeline: additivePipeline, writeDepth: writeDepth, readDepth: readDepth,
-            frustum: frustum, visibleChunks: Set(visibleChunks), renderDistance: renderDistance)
+            frustum: frustum, visibleChunks: Set(visible.map(\.position)), renderDistance: renderDistance,
+            skySubtraction: uniforms.skySubtraction, partialTick: partial)
         encoder.setRenderPipelineState(transparentPipeline)
         encoder.setDepthStencilState(readDepth)
         encoder.setFragmentTexture(textures.atlas, index: 0)
-        for position in visibleChunks.sorted(by: {
-            Self.distanceSquared(chunk: $0, camera: cameraPosition)
-                > Self.distanceSquared(chunk: $1, camera: cameraPosition)
-        }) {
-            guard let mesh = meshes[position] else { continue }
-            uniforms.renderOffset = Self.relative(
-                SIMD3(Double(position.x * 16), 0, Double(position.z * 16)), to: origin)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            if let vertices = mesh.translucent, let indices = mesh.translucentIndices,
-                mesh.translucentCount > 0
-            {
-                encoder.setVertexBuffer(vertices, offset: 0, index: 0)
-                encoder.drawIndexedPrimitives(
-                    type: .triangle, indexCount: mesh.translucentCount,
-                    indexType: .uint32, indexBuffer: indices, indexBufferOffset: 0)
-            }
+        visible.sort { $0.distance > $1.distance }
+        for chunk in visible {
+            guard let vertices = chunk.mesh.translucent, let indices = chunk.mesh.translucentIndices,
+                chunk.mesh.translucentCount > 0
+            else { continue }
+            bind(offset: chunk.offset)
+            encoder.setVertexBuffer(vertices, offset: 0, index: 0)
+            encoder.drawIndexedPrimitives(
+                type: .triangle, indexCount: chunk.mesh.translucentCount,
+                indexType: .uint32, indexBuffer: indices, indexBufferOffset: 0)
         }
-        uniforms.renderOffset = .zero
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        bind(offset: .zero)
         if let selected = session.selectedBlock {
             if session.miningProgress > 0 {
-                uniforms.renderOffset = Self.relative(
-                    SIMD3(
-                        Double(selected.position.x), Double(selected.position.y), Double(selected.position.z)),
-                    to: origin)
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                bind(
+                    offset: Self.relative(
+                        SIMD3(
+                            Double(selected.position.x), Double(selected.position.y),
+                            Double(selected.position.z)), to: origin))
                 drawBreaking(position: selected.position, encoder: encoder)
-                uniforms.renderOffset = .zero
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                bind(offset: .zero)
                 encoder.setRenderPipelineState(transparentPipeline)
             }
             let vertices = Self.selectionVertices(
@@ -332,6 +424,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             camera: camera, origin: origin, delta: delta, rain: session.rainStrength,
             pipeline: transparentPipeline,
             weatherPipeline: weatherPipeline, depth: readDepth, fancy: options.fancyGraphics)
+        skyRenderer.drawClouds(
+            encoder: encoder, center: Self.relative(eyePosition, to: origin), position: eyePosition,
+            matrix: matrix,
+            state: sky, ticks: session.tickCount, partial: partial, worldUniforms: uniforms,
+            fancy: options.fancyGraphics, visible: !nether)
         encoder.endEncoding()
         pass.colorAttachments[0].loadAction = .load
         pass.depthAttachment.loadAction = .clear
@@ -341,19 +438,30 @@ final class Renderer: NSObject, MTKViewDelegate {
                 at: BlockPosition(
                     Int(floor(cameraPosition.x)),
                     Int(floor(cameraPosition.y)), Int(floor(cameraPosition.z))))
-            uniforms.viewProjection = Self.perspective(aspect: aspect) * bobbing
+            uniforms.viewProjection = projection * hurt * bobbing
             uniforms.cameraPosition = .zero
             uniforms.fogStart = 100
             uniforms.fogEnd = 200
             uniforms.fogDensity = 0
-            firstPersonRenderer.draw(
-                encoder: handEncoder, heldItem: session.heldItem,
-                mining: session.isMining, delta: delta, light: eyeLight.sky << 4 | eyeLight.block,
-                uniforms: uniforms, pipeline: opaquePipeline, mapPipeline: mapPipeline, depth: writeDepth,
-                map: session.heldMap,
-                marker: session.heldMap?.marker(
-                    position: cameraPosition,
-                    yaw: camera.yaw, dimension: session.world.dimension), pitch: camera.pitch)
+            if !thirdPerson && !sleeping && !session.hideHUD {
+                firstPersonRenderer.draw(
+                    encoder: handEncoder,
+                    swingProgress: RenderMotion.swing(
+                        previous: session.player.previousSwingProgress, current: session.player.swingProgress,
+                        partial: partial),
+                    partialTick: partial, light: eyeLight.sky << 4 | eyeLight.block,
+                    uniforms: uniforms, pipeline: opaquePipeline, mapPipeline: mapPipeline, depth: writeDepth,
+                    map: session.heldMap,
+                    marker: session.heldMap?.marker(
+                        position: cameraPosition,
+                        yaw: camera.yaw, dimension: session.world.dimension), pitch: camera.pitch)
+            }
+            overlays.draw(
+                encoder: handEncoder, world: session.world, player: session.player, camera: camera,
+                position: eyePosition, projection: projection, skySubtraction: uniforms.skySubtraction,
+                portal: portal, fancy: options.fancyGraphics,
+                pumpkin: !thirdPerson && session.inventory.armor[3]?.id == 86,
+                firstPerson: !thirdPerson && !sleeping)
             handEncoder.endEncoding()
         }
         commandBuffer.present(drawable)
@@ -364,6 +472,30 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
         commandBuffer.commit()
+    }
+
+    private func reloadTexturePackIfNeeded() {
+        guard texturePackRevision != session.texturePackRevision else { return }
+        texturePackRevision = session.texturePackRevision
+        TextureResources.configure(overrideURL: session.texturePackURL, revision: texturePackRevision)
+        do {
+            let textures = try VanillaTextures(device: device)
+            let library = try device.makeDefaultLibrary(bundle: .main)
+            try skyRenderer.reload(device: device)
+            try InventoryRenderImages.shared.configure(
+                device: device, atlas: textures.atlas, library: library, queue: queue)
+            self.textures = textures
+            entityRenderer.reload(atlas: textures.atlas, items: textures.items)
+            firstPersonRenderer.reload(atlas: textures.atlas, items: textures.items)
+            effectsRenderer.reload(atlas: textures.atlas)
+            overlays.reload(atlas: textures.atlas)
+            meshEpoch &+= 1
+            for job in meshJobs.values { job.cancel() }
+            readyMeshes.removeAll()
+            meshes.removeAll()
+            breakingCache = nil
+            cachedWorldSeed = nil
+        } catch { session.errorMessage = error.localizedDescription }
     }
 
     private func drawBreaking(position: BlockPosition, encoder: MTLRenderCommandEncoder) {
@@ -380,7 +512,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                         position: center + (vertex.position - center) * 1.004,
                         color: SIMD3(repeating: 1), uv: (SIMD2(Float(stage), 15) + localUV) / 16)
                 }
-            breakingCache = (position, session.world.revision, stage, makeBuffer(vertices), vertices.count)
+            breakingCache = (
+                position, session.world.revision, stage, device.makeSharedBuffer(vertices), vertices.count
+            )
         }
         guard let cache = breakingCache else { return }
         encoder.setRenderPipelineState(breakingPipeline)
@@ -409,10 +543,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         cachedDimension = world.dimension
         cachedSessionGeneration = session.sessionGeneration
         let retainedDistance = Double(distance + 32)
-        meshes = meshes.filter {
-            world.chunks[$0.key] != nil
-                && Self.distanceSquared(chunk: $0.key, camera: camera) < retainedDistance * retainedDistance
+        let stale = meshes.keys.filter {
+            world.chunks[$0] == nil
+                || Self.distanceSquared(chunk: $0, camera: camera) >= retainedDistance * retainedDistance
         }
+        for position in stale { meshes[position] = nil }
         let uploadDeadline = CACurrentMediaTime() + 0.004
         var uploaded = 0
         readyMeshes.sort {
@@ -430,17 +565,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             if let geometry = result.geometry {
                 meshes[result.position] = ChunkMesh(
                     revision: result.revision,
-                    opaque: makeBuffer(geometry.opaque), opaqueCount: geometry.opaque.count,
-                    cutout: makeBuffer(geometry.cutout), cutoutCount: geometry.cutout.count,
-                    translucent: makeBuffer(geometry.translucent),
+                    opaque: device.makeSharedBuffer(geometry.opaque), opaqueCount: geometry.opaque.count,
+                    cutout: device.makeSharedBuffer(geometry.cutout), cutoutCount: geometry.cutout.count,
+                    translucent: device.makeSharedBuffer(geometry.translucent),
                     translucentCount: geometry.translucent.count,
-                    translucentIndices: makeIndexBuffer(result.indices), translucentCenters: geometry.centers,
+                    translucentIndices: device.makeSharedBuffer(result.indices),
+                    translucentCenters: geometry.centers,
                     sortedAt: result.sortedAt, options: result.options)
             } else {
                 guard var mesh = meshes[result.position], mesh.revision == result.revision,
                     mesh.options == result.options, mesh.translucentCount == result.indices.count,
                     !TranslucentSort.needsUpdate(from: result.sortedAt, to: camera),
-                    let indices = makeIndexBuffer(result.indices)
+                    let indices = device.makeSharedBuffer(result.indices)
                 else { continue }
                 mesh.translucentIndices = indices
                 mesh.sortedAt = result.sortedAt
@@ -532,22 +668,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func makeIndexBuffer(_ indices: [UInt32]) -> MTLBuffer? {
-        guard !indices.isEmpty else { return nil }
-        return indices.withUnsafeBytes { bytes in
-            guard let address = bytes.baseAddress else { return nil }
-            return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-        }
-    }
-
-    private func makeBuffer(_ vertices: [BlockVertex]) -> MTLBuffer? {
-        guard !vertices.isEmpty else { return nil }
-        return vertices.withUnsafeBytes { bytes in
-            guard let address = bytes.baseAddress else { return nil }
-            return device.makeBuffer(bytes: address, length: bytes.count, options: .storageModeShared)
-        }
-    }
-
     private func draw(buffer: MTLBuffer?, count: Int, encoder: MTLRenderCommandEncoder) {
         guard let buffer, count > 0 else { return }
         encoder.setVertexBuffer(buffer, offset: 0, index: 0)
@@ -555,13 +675,16 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func fogDistance(position: SIMD3<Double>, configuredDistance: Float) -> Float {
-        let positions = session.world.chunks.keys
-        guard let minX = positions.map(\.x).min(), let maxX = positions.map(\.x).max(),
-            let minZ = positions.map(\.z).min(), let maxZ = positions.map(\.z).max()
-        else { return 32 }
+        var minimum = SIMD2(Int.max, Int.max)
+        var maximum = SIMD2(Int.min, Int.min)
+        for chunk in session.world.chunks.keys {
+            minimum = pointwiseMin(minimum, SIMD2(chunk.x, chunk.z))
+            maximum = pointwiseMax(maximum, SIMD2(chunk.x, chunk.z))
+        }
+        guard minimum.x <= maximum.x else { return 32 }
         let distance = min(
-            position.x - Double(minX * 16), Double((maxX + 1) * 16) - position.x,
-            position.z - Double(minZ * 16), Double((maxZ + 1) * 16) - position.z)
+            position.x - Double(minimum.x * 16), Double((maximum.x + 1) * 16) - position.x,
+            position.z - Double(minimum.y * 16), Double((maximum.y + 1) * 16) - position.z)
         return Float(max(16, min(Double(configuredDistance) - 4, distance - 4)))
     }
 
@@ -592,9 +715,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         return SIMD3(Float(value.x), Float(value.y), Float(value.z))
     }
 
-    private static func perspective(aspect: Float, far: Float = 256) -> simd_float4x4 {
+    private static func perspective(aspect: Float, far: Float = 256, fov: Float = 70) -> simd_float4x4 {
         let near: Float = 0.05
-        let y: Float = 1 / tan(70 * .pi / 360)
+        let y: Float = 1 / tan(fov * BetaVisualMath.pi / 360)
         let z = far / (near - far)
         return simd_float4x4(
             columns: (
@@ -611,7 +734,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private static func viewMatrix(camera: Camera) -> simd_float4x4 {
         let forward = camera.forward
-        let right = simd_normalize(simd_cross(forward, SIMD3(0, 1, 0)))
+        let right = SIMD3<Float>(cos(camera.yaw), 0, sin(camera.yaw))
         let up = simd_cross(right, forward)
         let position = camera.position
         return simd_float4x4(

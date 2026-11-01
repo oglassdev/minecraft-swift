@@ -2,16 +2,35 @@ import Foundation
 
 enum EntityMotion {
     @discardableResult
-    static func move(_ entity: inout GameEntity, world: BlockWorld, stepHeight: Double = 0) -> Bool {
+    static func move(
+        _ entity: inout GameEntity, world: BlockWorld, stepHeight: Double = 0, bodies: [GameEntity] = [],
+        collisions: EntityCollisionView? = nil
+    ) -> Bool {
+        let collisions = collisions ?? EntityCollisionView(index: nil, fallback: bodies)
+        let vehicle = entity.kind == "boat" || entity.kind == "minecart"
         let original = entity.bounds
-        let requested = entity.velocity
-        var result = resolve(requested, bounds: original, world: world)
+        var requested = entity.velocity
+        if entity.inWeb {
+            entity.inWeb = false
+            requested *= SIMD3(0.25, Double(Float(0.05)), 0.25)
+            entity.velocity = .zero
+        }
+        var result = resolve(
+            requested, bounds: original, world: world, moverID: entity.id, vehicle: vehicle,
+            collisions: collisions)
         if stepHeight > 0, entity.onGround || (requested.y < 0 && requested.y != result.movement.y),
             requested.x != result.movement.x || requested.z != result.movement.z
         {
-            let raised = resolve(SIMD3(requested.x, stepHeight, requested.z), bounds: original, world: world)
-            let obstacles = BlockCollision.boxes(
-                in: world, intersecting: original.swept(by: SIMD3(requested.x, stepHeight, requested.z)))
+            let raised = resolve(
+                SIMD3(requested.x, stepHeight, requested.z), bounds: original, world: world,
+                moverID: entity.id,
+                vehicle: vehicle, collisions: collisions)
+            let obstacles =
+                BlockCollision.boxes(
+                    in: world, intersecting: original.swept(by: SIMD3(requested.x, stepHeight, requested.z)))
+                + collisions.boxes(
+                    movingID: entity.id, vehicle: vehicle,
+                    intersecting: original.swept(by: SIMD3(requested.x, stepHeight, requested.z)))
             var down = -stepHeight
             for obstacle in obstacles { down = obstacle.clip(down, axis: 1, moving: raised.bounds) }
             let stepped = raised.movement + SIMD3(0, down, 0)
@@ -31,7 +50,7 @@ enum EntityMotion {
                     entity.pendingPigFall = entity.fallDistance
                 }
                 if entity.fallDistance > 3 && !["chicken", "ghast"].contains(entity.kind) {
-                    entity.health -= Int(ceil(entity.fallDistance - 3))
+                    _ = entity.receiveDamage(Int(ceil(entity.fallDistance - 3)))
                 }
                 entity.fallDistance = 0
             } else if result.movement.y < 0 {
@@ -40,6 +59,7 @@ enum EntityMotion {
         }
         for axis in 0..<3 where requested[axis] != result.movement[axis] { entity.velocity[axis] = 0 }
         entity.isCollidingHorizontally = requested.x != result.movement.x || requested.z != result.movement.z
+        blockContacts(&entity, world: world)
         if !["item", "primedTnt", "fallingSand", "boat", "minecart", "spider", "wolf"].contains(entity.kind) {
             let x = entity.position.x - (original.min.x + original.max.x) / 2
             let z = entity.position.z - (original.min.z + original.max.z) / 2
@@ -57,11 +77,15 @@ enum EntityMotion {
     }
 
     static func living(
-        _ entity: inout GameEntity, world: BlockWorld, forward: Float, strafe: Float = 0, jump: Bool
+        _ entity: inout GameEntity, world: BlockWorld, forward: Float, strafe: Float = 0, jump: Bool,
+        bodies: [GameEntity] = [], collisions: EntityCollisionView? = nil
     ) -> Bool {
-        let water = isFluid(in: world, bounds: entity.bounds, water: true)
+        let collisions = collisions ?? EntityCollisionView(index: nil, fallback: bodies)
+        let water = entity.isInWater
         let lava = isFluid(
-            in: world, bounds: entity.bounds.expanded(by: SIMD3(-0.1, -min(0.4, entity.height / 3), -0.1)),
+            in: world,
+            bounds: entity.bounds.expanded(
+                by: SIMD3(-Double(Float(0.1)), -Double(Float(0.4)), -Double(Float(0.1)))),
             water: false)
         if jump {
             if water || lava {
@@ -71,11 +95,24 @@ enum EntityMotion {
             }
         }
         if water || lava {
+            let previousY = entity.position.y
             if water { entity.fallDistance = 0 }
             accelerate(&entity, forward: forward * 0.98, strafe: strafe * 0.98, speed: 0.02)
-            let blocked = move(&entity, world: world, stepHeight: 0.5)
+            let blocked = move(&entity, world: world, stepHeight: 0.5, collisions: collisions)
             entity.velocity *= water ? Double(Float(0.8)) : 0.5
             entity.velocity.y -= 0.02
+            let escape = entity.bounds.offset(
+                by: SIMD3(
+                    entity.velocity.x, entity.velocity.y + Double(Float(0.6)) - entity.position.y + previousY,
+                    entity.velocity.z))
+            if blocked && BlockCollision.boxes(in: world, intersecting: escape).isEmpty
+                && collisions.boxes(movingID: entity.id, vehicle: false, intersecting: escape).isEmpty
+                && !isFluid(in: world, bounds: escape, water: true)
+                && !isFluid(in: world, bounds: escape, water: false)
+            {
+                entity.velocity.y = Double(Float(0.3))
+            }
+            entity.updateLimbSwing()
             return blocked
         }
         var friction: Float = 0.91
@@ -88,10 +125,20 @@ enum EntityMotion {
         }
         let speed: Float = entity.onGround ? 0.1 * (0.16277136 / (friction * friction * friction)) : 0.02
         accelerate(&entity, forward: forward * 0.98, strafe: strafe * 0.98, speed: speed)
-        let blocked = move(&entity, world: world, stepHeight: 0.5)
+        let foot = BlockPosition(
+            Int(floor(entity.position.x)), Int(floor(entity.position.y)), Int(floor(entity.position.z)))
+        if world[foot] == .ladder || (entity.kind == "spider" && entity.isCollidingHorizontally) {
+            entity.velocity.x = min(max(entity.velocity.x, -Double(Float(0.15))), Double(Float(0.15)))
+            entity.velocity.z = min(max(entity.velocity.z, -Double(Float(0.15))), Double(Float(0.15)))
+            entity.velocity.y = max(entity.velocity.y, -0.15)
+            entity.fallDistance = 0
+        }
+        let blocked = move(&entity, world: world, stepHeight: 0.5, collisions: collisions)
+        if blocked && (world[foot] == .ladder || entity.kind == "spider") { entity.velocity.y = 0.2 }
         entity.velocity.y = (entity.velocity.y - 0.08) * Double(Float(0.98))
         entity.velocity.x *= Double(friction)
         entity.velocity.z *= Double(friction)
+        entity.updateLimbSwing()
         return blocked
     }
 
@@ -109,6 +156,9 @@ enum EntityMotion {
     }
 
     static func isFluid(in world: BlockWorld, bounds: AxisAlignedBox, water: Bool) -> Bool {
+        guard floor(bounds.min.x) <= floor(bounds.max.x), floor(bounds.min.y) <= floor(bounds.max.y),
+            floor(bounds.min.z) <= floor(bounds.max.z)
+        else { return false }
         for x in Int(floor(bounds.min.x))...Int(floor(bounds.max.x)) {
             for y in Int(floor(bounds.min.y))...Int(floor(bounds.max.y)) {
                 for z in Int(floor(bounds.min.z))...Int(floor(bounds.max.z)) {
@@ -117,6 +167,62 @@ enum EntityMotion {
                     {
                         return true
                     }
+                }
+            }
+        }
+        return false
+    }
+
+    private static func blockContacts(_ entity: inout GameEntity, world: BlockWorld) {
+        let bounds = entity.bounds.expanded(by: SIMD3(repeating: -0.001))
+        guard bounds.min.y <= bounds.max.y else { return }
+        var burning = false
+        for x in Int(floor(bounds.min.x))...Int(floor(bounds.max.x)) {
+            for y in Int(floor(bounds.min.y))...Int(floor(bounds.max.y)) {
+                for z in Int(floor(bounds.min.z))...Int(floor(bounds.max.z)) {
+                    switch world[BlockPosition(x, y, z)] {
+                    case .cobweb:
+                        entity.inWeb = true
+                        entity.fallDistance = 0
+                    case .soulSand:
+                        entity.velocity.x *= 0.4
+                        entity.velocity.z *= 0.4
+                    case .cactus: _ = entity.receiveDamage(1)
+                    case .fire, .lava, .stillLava: burning = true
+                    default: break
+                    }
+                }
+            }
+        }
+        if burning {
+            if !entity.fireImmune { _ = entity.receiveDamage(1) }
+            if !entity.isWet {
+                entity.fireTicks += 1
+                if entity.fireTicks == 0 { entity.fireTicks = 300 }
+            }
+        } else if entity.fireTicks <= 0 {
+            entity.fireTicks = -1
+        }
+        if entity.isWet && entity.fireTicks > 0 {
+            entity.pendingFizz = true
+            entity.fireTicks = -1
+        }
+    }
+
+    static func fluidSurfaceContact(in world: BlockWorld, bounds: AxisAlignedBox, water: Bool) -> Bool {
+        guard floor(bounds.min.x) <= floor(bounds.max.x), floor(bounds.min.y) <= floor(bounds.max.y),
+            floor(bounds.min.z) <= floor(bounds.max.z)
+        else { return false }
+        for x in Int(floor(bounds.min.x))...Int(floor(bounds.max.x)) {
+            for y in Int(floor(bounds.min.y))...Int(floor(bounds.max.y)) {
+                for z in Int(floor(bounds.min.z))...Int(floor(bounds.max.z)) {
+                    guard let state = world.state(at: BlockPosition(x, y, z)),
+                        water
+                            ? (state.kind == .water || state.kind == .stillWater)
+                            : (state.kind == .lava || state.kind == .stillLava)
+                    else { continue }
+                    let surface = Double(y + 1) - (state.metadata < 8 ? Double(state.metadata) / 8 : 0)
+                    if surface >= bounds.min.y { return true }
                 }
             }
         }
@@ -201,10 +307,15 @@ enum EntityMotion {
         return (1 - inverse) / (inverse * 3 + 1) * (1 - minimum) + minimum
     }
 
-    private static func resolve(_ movement: SIMD3<Double>, bounds: AxisAlignedBox, world: BlockWorld) -> (
+    private static func resolve(
+        _ movement: SIMD3<Double>, bounds: AxisAlignedBox, world: BlockWorld, moverID: Int64,
+        vehicle: Bool, collisions: EntityCollisionView
+    ) -> (
         movement: SIMD3<Double>, bounds: AxisAlignedBox
     ) {
-        let obstacles = BlockCollision.boxes(in: world, intersecting: bounds.swept(by: movement))
+        let obstacles =
+            BlockCollision.boxes(in: world, intersecting: bounds.swept(by: movement))
+            + collisions.boxes(movingID: moverID, vehicle: vehicle, intersecting: bounds.swept(by: movement))
         var bounds = bounds
         var movement = movement
         for axis in [1, 0, 2] {
@@ -229,6 +340,7 @@ extension EntitySimulation {
             var entity = entities[index]
             if entity.kind == "painting", movement != .zero {
                 entities[index].health = 0
+                entities[index].lootDropped = true
                 queuedEvents.append(
                     .dropItem(
                         position: entity.position + SIMD3(0, entity.height / 2, 0), stack: ItemStack(id: 321))
@@ -238,7 +350,7 @@ extension EntitySimulation {
             var velocity = entity.velocity
             let before = entity.position
             entity.velocity = movement
-            _ = EntityMotion.move(&entity, world: world)
+            _ = EntityMotion.move(&entity, world: world, collisions: collisionView())
             let actual = entity.position - before
             for axis in 0..<3 where abs(actual[axis] - movement[axis]) > 0.0000001 { velocity[axis] = 0 }
             entity.velocity = velocity
@@ -266,7 +378,7 @@ extension EntitySimulation {
                     name: "random.fizz", position: entity.position, volume: 0.4,
                     pitch: 2 + random.nextFloat() * 0.4))
         }
-        _ = EntityMotion.move(&entity, world: world)
+        _ = EntityMotion.move(&entity, world: world, collisions: collisionView())
         var friction: Float = 0.98
         if entity.onGround {
             let below = world[
@@ -277,7 +389,8 @@ extension EntitySimulation {
         }
         entity.velocity *= SIMD3(Double(friction), Double(Float(0.98)), Double(friction))
         if entity.onGround { entity.velocity.y *= -0.5 }
-        if entity.pickupDelay == 0, entity.bounds.intersects(player.bounds.expanded(by: SIMD3(1, 0, 1))),
+        if player.health > 0, entity.pickupDelay == 0,
+            entity.bounds.intersects(player.bounds.expanded(by: SIMD3(1, 0, 1))),
             let stack = entity.itemStack
         {
             let leftover = inventory.insert(stack)
@@ -300,7 +413,7 @@ extension EntitySimulation {
             return []
         }
         entity.velocity.y -= Double(Float(0.04))
-        _ = EntityMotion.move(&entity, world: world)
+        _ = EntityMotion.move(&entity, world: world, collisions: collisionView())
         entity.velocity *= Double(Float(0.98))
         let cell = BlockPosition(
             Int(floor(entity.position.x)), Int(floor(entity.position.y)), Int(floor(entity.position.z)))
@@ -328,23 +441,4 @@ extension EntitySimulation {
         return []
     }
 
-    mutating func pushNearbyEntities(player: inout Player) {
-        for index in entities.indices
-        where entities[index].health > 0
-            && (entities[index].isLiving || ["boat", "minecart"].contains(entities[index].kind))
-        {
-            guard entities[index].riderID != 0,
-                entities[index].bounds.intersects(player.bounds.expanded(by: SIMD3(0.2, 0, 0.2)))
-            else { continue }
-            let delta = SIMD3(
-                entities[index].position.x - player.position.x, 0,
-                entities[index].position.z - player.position.z)
-            let distance = max(abs(delta.x), abs(delta.z))
-            guard distance >= 0.01 else { continue }
-            let scale = sqrt(distance)
-            let impulse = delta / scale * min(1 / scale, 1) * Double(Float(0.05))
-            entities[index].velocity += impulse
-            player.addVelocity(-impulse)
-        }
-    }
 }

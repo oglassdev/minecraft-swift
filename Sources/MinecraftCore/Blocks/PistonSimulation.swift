@@ -37,9 +37,7 @@ enum PistonSimulation {
             guard let line = pushLine(from: front, direction: direction, world: world) else { return result }
             if let last = line.last, let state = world.state(at: last), fragile.contains(state.kind.rawValue)
             {
-                for stack in BlockMining.explosionDrops(for: state, roll: { random.nextInt(bound: $0) }) {
-                    result.events.append(.dropItem(position: last.center, stack: stack))
-                }
+                result.events += BlockDrops.destroy(state, at: last, random: &random)
             }
             var destination = line.last ?? front
             while destination != p {

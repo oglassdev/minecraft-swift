@@ -3,6 +3,42 @@ import MinecraftCore
 import Testing
 
 @Suite struct ItemUseTests {
+    @Test func itemAndWorldRandomStreamsMatchOriginalFlintAndNetherBucket() {
+        var actions = ItemActions(seed: 1234)
+        var world = BlockWorld(seed: 0, dimension: -1)
+        let floor = BlockPosition(8, 0, 8)
+        world[floor] = .stone
+        let hit = BlockRaycast.hit(in: world, origin: SIMD3(8.5, 3, 8.5), direction: SIMD3(0, -1, 0))!
+        let bounds = AxisAlignedBox(min: SIMD3(30, 1, 30), max: SIMD3(30.6, 2.8, 30.6))
+        var worldRandom = JavaRandom(seed: 1234)
+        let flint = actions.interactWithBlock(
+            hit: hit, holding: ItemStack(id: 259), yaw: 0,
+            playerBounds: bounds, world: &world, random: &worldRandom)
+        #expect(flint.durabilityDamage == 1)
+        if case .sound(let name, let position, let volume, let pitch) = flint.events.first {
+            #expect(name == "fire.ignite" && position == SIMD3(8.5, 1.5, 8.5))
+            #expect(volume == 1 && pitch == 1.0586329)
+        } else {
+            Issue.record("Missing original flint sound")
+        }
+        let unchangedWorldRandom = worldRandom.nextInt()
+        #expect(unchangedWorldRandom == -1_517_918_040)
+        world[BlockPosition(8, 1, 8)] = nil
+        worldRandom = JavaRandom(seed: 1234)
+        let bucket = BlockInteractions.useBucket(
+            hit: hit, holding: ItemStack(id: 326), world: &world,
+            eye: SIMD3(30.3, 2.62, 30.3), random: &worldRandom)
+        #expect(bucket.replacement?.id == 325 && bucket.events.count == 9)
+        if case .sound(let name, let position, let volume, let pitch) = bucket.events.first {
+            #expect(name == "random.fizz" && position == SIMD3(30.8, 3.12, 30.8))
+            #expect(volume == 0.5 && pitch == 2.9094336)
+        } else {
+            Issue.record("Missing original Nether water sound")
+        }
+        let advancedWorldRandom = worldRandom.nextInt()
+        #expect(advancedWorldRandom == -208_917_030)
+    }
+
     @Test func originalProjectilesConsumeItemsAndUseOriginalSoundPitch() {
         var actions = ItemActions(seed: 123_456_789)
         var world = BlockWorld()

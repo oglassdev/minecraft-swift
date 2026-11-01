@@ -237,19 +237,7 @@ enum FluidSimulation {
     ) {
         if let state = world.state(at: p) {
             if water {
-                for stack in BlockMining.explosionDrops(for: state, roll: { random.nextInt(bound: $0) }) {
-                    for _ in 0..<stack.count {
-                        _ = random.nextFloat()
-                        let offset = SIMD3(
-                            Double(random.nextFloat() * 0.7 + 0.15),
-                            Double(random.nextFloat() * 0.7 + 0.15), Double(random.nextFloat() * 0.7 + 0.15))
-                        let origin = SIMD3(Double(p.x), Double(p.y), Double(p.z))
-                        result.events.append(
-                            .dropItem(
-                                position: origin + offset,
-                                stack: ItemStack(id: stack.id, damage: stack.damage)))
-                    }
-                }
+                result.events += BlockDrops.destroy(state, at: p, random: &random)
             } else {
                 result.events.append(BlockInteractions.sound("random.fizz", at: p))
             }

@@ -14,7 +14,6 @@ public struct MovementInput: Sendable {
     }
 }
 
-/// A free-flight camera for exploring the renderer before player physics exists.
 public struct Camera: Sendable {
     public private(set) var position: SIMD3<Float>
     public private(set) var yaw: Float
@@ -30,7 +29,7 @@ public struct Camera: Sendable {
         self.pitch = min(max(pitch, -Self.pitchLimit), Self.pitchLimit)
     }
 
-    private static let pitchLimit: Float = .pi / 2 - 0.01
+    private static let pitchLimit = Float(Double.pi / 2)
 
     public var forward: SIMD3<Float> {
         SIMD3(sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))

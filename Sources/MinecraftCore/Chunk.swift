@@ -7,6 +7,8 @@ public struct ChunkPosition: Hashable, Codable, Sendable {
         self.z = z
     }
     public init(_ x: Int, _ z: Int) { self.init(x: x, z: z) }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(x << 32 | z & 0xFFFF_FFFF) }
 }
 
 public struct Chunk: Sendable, Codable {

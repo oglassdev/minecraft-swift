@@ -48,9 +48,9 @@ import Testing
     var camera = Camera(position: .zero, yaw: 0, pitch: 0)
     camera.look(horizontal: 20 * .pi, vertical: 100)
     #expect(abs(camera.yaw) < 0.0001)
-    #expect(camera.pitch < .pi / 2)
+    #expect(camera.pitch == Float(Double.pi / 2))
     camera.look(horizontal: 0, vertical: -200)
-    #expect(camera.pitch > -.pi / 2)
+    #expect(camera.pitch == -Float(Double.pi / 2))
 }
 
 @Test func demoWorldIsDeterministic() {

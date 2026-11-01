@@ -2,6 +2,16 @@ import Foundation
 import MinecraftCore
 import Testing
 
+private struct TextureAtlasReference: Decodable {
+    struct Block: Decodable {
+        let id: UInt8
+        let faces: [[Int?]]
+    }
+    let version: String
+    let clientSHA1: String
+    let blocks: [Block]
+}
+
 @Test func meshTextureMetadataMatchesBeta() {
     #expect(BlockAtlas.textureIndex(for: BlockState(.grass), face: .top) == 0)
     #expect(BlockAtlas.textureIndex(for: BlockState(.grass), face: .bottom) == 2)
@@ -21,17 +31,8 @@ import Testing
 }
 
 @Test func meshAtlasMatchesOriginalClient() throws {
-    struct Reference: Decodable {
-        struct Block: Decodable {
-            let id: UInt8
-            let faces: [[Int?]]
-        }
-        let version: String
-        let clientSHA1: String
-        let blocks: [Block]
-    }
     let url = try #require(Bundle.module.url(forResource: "BlockAtlas", withExtension: "json"))
-    let reference = try JSONDecoder().decode(Reference.self, from: Data(contentsOf: url))
+    let reference = try JSONDecoder().decode(TextureAtlasReference.self, from: Data(contentsOf: url))
     #expect(reference.version == "b1.7.3")
     #expect(reference.clientSHA1 == "43db9b498cb67058d2e12d394e6507722e71bb45")
     for block in reference.blocks {
@@ -44,6 +45,27 @@ import Testing
             }
         }
     }
+}
+
+@Test func meshInventoryAtlasMatchesOriginalClient() throws {
+    let url = try #require(Bundle.module.url(forResource: "InventoryBlockAtlas", withExtension: "json"))
+    let reference = try JSONDecoder().decode(TextureAtlasReference.self, from: Data(contentsOf: url))
+    for block in reference.blocks {
+        let kind = try #require(BlockKind(rawValue: block.id))
+        for face in BlockFace.allCases {
+            for (metadata, expected) in block.faces[face.rawValue].enumerated() {
+                guard let expected else { continue }
+                #expect(
+                    BlockAtlas.inventoryTextureIndex(
+                        for: BlockState(kind, metadata: UInt8(metadata)), face: face) == abs(expected))
+            }
+        }
+    }
+    var world = BlockWorld()
+    world[BlockPosition(0, 0, 0)] = .fence
+    #expect(
+        BlockMesh(world: world, blockAt: BlockPosition(0, 0, 0), options: BlockMeshOptions(inventory: true))
+            .vertices.count == 144)
 }
 
 @Test func meshCullsFacesAcrossChunkBoundaries() {
@@ -176,4 +198,17 @@ import Testing
         fast.opaqueVertices.allSatisfy {
             Int($0.uv.x * 16) == 5 && Int($0.uv.y * 16) == 3
         })
+}
+
+@Test func grassOverlaySharesExactBaseSurfaceAndLighting() {
+    var world = BlockWorld()
+    world[BlockPosition(15, 64, -16)] = .grass
+    let mesh = BlockMesh(world: world, options: BlockMeshOptions(smoothLighting: true))
+    #expect(mesh.cutoutVertices.count == 24)
+    for overlay in mesh.cutoutVertices {
+        #expect(
+            mesh.opaqueVertices.contains {
+                $0.position == overlay.position && $0.lightSamples == overlay.lightSamples
+            })
+    }
 }

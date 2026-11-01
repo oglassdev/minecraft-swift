@@ -1,6 +1,16 @@
 import Foundation
 
 extension EntitySimulation {
+    public mutating func spawnNaturally(
+        in world: BlockWorld, near player: Player, time: Int64, worldRandom: inout JavaRandom
+    ) {
+        let saved = random
+        random = worldRandom
+        spawnNatural(in: world, near: player, time: time)
+        worldRandom = random
+        random = saved
+    }
+
     mutating func spawnNatural(in world: BlockWorld, near player: Player, time: Int64) {
         guard player.health > 0 else { return }
         let center = ChunkPosition(Int(floor(player.position.x / 16)), Int(floor(player.position.z / 16)))
@@ -9,7 +19,10 @@ extension EntitySimulation {
         }
         spawnSetWarmed = true
         for category in 0..<3 {
-            let population = entities.filter { Self.spawnCategory($0.kind) == category }.count
+            var population = 0
+            for index in entities.indices where Self.spawnCategory(entities[index].kind) == category {
+                population += 1
+            }
             guard population <= [70, 15, 5][category] * 289 / 256 else { continue }
             for chunk in chunks {
                 let choices = spawnChoices(in: world, chunk: chunk, category: category)
@@ -46,30 +59,44 @@ extension EntitySimulation {
                         let position = SIMD3(
                             Double(Float(candidate.x) + 0.5), Double(Float(candidate.y)),
                             Double(Float(candidate.z) + 0.5))
-                        guard EntityMotion.squaredLength(position - player.position) >= 576 else { continue }
+                        guard EntityMotion.squaredLength(position - player.eyePositionDouble) >= 576 else {
+                            continue
+                        }
                         let spawnDelta = SIMD3<Float>(position - spawnPosition)
                         guard
                             spawnDelta.x * spawnDelta.x + spawnDelta.y * spawnDelta.y + spawnDelta.z
                                 * spawnDelta.z >= 576
                         else { continue }
-                        var probe = GameEntity(id: 0, kind: kind, position: position)
-                        if kind == "slime" {
-                            probe.metadata = UInt8(1 << random.nextInt(bound: 3))
-                            probe.width = Double(Float(0.6) * Float(probe.metadata))
-                            probe.height = probe.width
+                        let id = spawn(kind: kind, position: position)
+                        var probe = entities.removeLast()
+                        let yaw = random.nextFloat() * 360
+                        let worldGenerator = random
+                        random = entityRandom(for: id)
+                        let allowed = canSpawnNaturally(
+                            probe, in: world, time: time, difficulty: player.difficulty)
+                        entityRandoms[id] = random
+                        random = worldGenerator
+                        guard allowed else {
+                            entityRandoms[id] = nil
+                            continue
                         }
-                        let yaw = random.nextFloat() * 2 * BetaMath.pi
-                        guard canSpawnNaturally(probe, in: world, time: time, difficulty: player.difficulty)
-                        else { continue }
-                        let id = spawn(
-                            kind: kind, position: position, metadata: kind == "slime" ? probe.metadata : nil)
-                        entities[entities.count - 1].yaw = yaw
+                        probe.yaw = yaw * BetaMath.pi / 180 - BetaMath.pi
+                        entities.append(probe)
                         if kind == "spider", random.nextInt(bound: 100) == 0 {
                             spawn(kind: "skeleton", position: position)
-                            entities[entities.count - 1].yaw = yaw
+                            entities[entities.count - 1].yaw = probe.yaw
                             if let spiderIndex = entities.firstIndex(where: { $0.id == id }) {
                                 entities[spiderIndex].riderID = entities.last?.id
                             }
+                        }
+                        if kind == "sheep" {
+                            let roll = random.nextInt(bound: 100)
+                            let color: UInt8 =
+                                roll < 5
+                                ? 15
+                                : (roll < 10
+                                    ? 7 : (roll < 15 ? 8 : (random.nextInt(bound: 500) == 0 ? 6 : 0)))
+                            entities[entities.count - 1].metadata = color
                         }
                         spawned += 1
                         if spawned >= limit { break pack }
@@ -85,7 +112,7 @@ extension EntitySimulation {
             return [("spider", 10), ("zombie", 10), ("skeleton", 10), ("creeper", 10), ("slime", 10)]
         }
         if category == 2 { return [("squid", 10)] }
-        let climate = world.climate(atX: chunk.x * 16 + 8, z: chunk.z * 16 + 8)
+        let climate = world.climate(atX: chunk.x * 16, z: chunk.z * 16)
         let biome = BetaBiome.lookup(temperature: climate.temperature, humidity: climate.humidity)
         return [("sheep", 12), ("pig", 10), ("chicken", 10), ("cow", 8)]
             + ((biome == .forest || biome == .taiga) ? [("wolf", 2)] : [])

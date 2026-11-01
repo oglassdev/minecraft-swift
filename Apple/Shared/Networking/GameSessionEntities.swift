@@ -19,12 +19,7 @@ extension GameSession {
             entity.velocity = SIMD3<Double>(velocity) / 128
             entitySimulation.upsert(entity)
         case .mobSpawn(let id, let type, let position, let yaw, let pitch, let metadata):
-            let kinds: [UInt8: String] = [
-                50: "creeper", 51: "skeleton", 52: "spider", 53: "giant", 54: "zombie", 55: "slime",
-                56: "ghast", 57: "pigZombie", 90: "pig", 91: "sheep", 92: "cow", 93: "chicken", 94: "squid",
-                95: "wolf",
-            ]
-            guard let kind = kinds[type] else { return }
+            guard let kind = Self.mobKinds[type] else { return }
             var entity = remoteEntity(id: id, kind: kind, position: position)
             entity.yaw = networkYaw(yaw)
             entity.pitch = networkPitch(pitch)
@@ -35,17 +30,21 @@ extension GameSession {
             entitySimulation.upsert(entity)
             applyRemoteMetadata(id: Int64(id), entries: metadata)
         case .objectSpawn(let id, let type, let position, let data, let velocity):
-            let kinds: [Int8: String] = [
-                1: "boat", 10: "minecart", 11: "minecart", 12: "minecart", 50: "primedTnt", 60: "arrow",
-                61: "snowball", 62: "egg", 63: "fireball", 70: "fallingSand", 71: "fallingSand",
-                90: "fishingHook",
-            ]
-            guard let kind = kinds[type] else { return }
+            guard let kind = Self.objectKinds[type] else { return }
             var entity = remoteEntity(id: id, kind: kind, position: position)
             if (10...12).contains(type) { entity.metadata = UInt8(type - 10) }
             if type == 71 { entity.fallingBlock = BlockState(.gravel) }
             if data > 0 { entity.projectileOwner = Int64(data) }
-            if let velocity { entity.velocity = SIMD3<Double>(velocity) / 8000 }
+            if let velocity {
+                entity.velocity = SIMD3<Double>(velocity) / 8000
+                if entity.hasProjectileRotation {
+                    entity.yaw = Float(atan2(entity.velocity.x, -entity.velocity.z))
+                    entity.pitch = Float(
+                        atan2(entity.velocity.y, hypot(entity.velocity.x, entity.velocity.z)))
+                    entity.previousYaw = entity.yaw
+                    entity.previousPitch = entity.pitch
+                }
+            }
             if type == 63 {
                 entity.acceleration = entity.velocity
                 entity.velocity = .zero
@@ -74,16 +73,16 @@ extension GameSession {
             moveRemote(id: id, delta: delta, yaw: yaw, pitch: pitch)
         case .entityLook(let id, let yaw, let pitch):
             entitySimulation.update(id: Int64(id)) { entity in
-                entity.remoteYaw = networkYaw(yaw)
-                entity.remotePitch = networkPitch(pitch)
+                entity.remoteYaw = networkYaw(yaw, projectile: entity.hasProjectileRotation)
+                entity.remotePitch = networkPitch(pitch, projectile: entity.hasProjectileRotation)
                 entity.remoteTicks = 3
             }
         case .teleport(let id, let position, let yaw, let pitch):
             state.fixedPositions[Int64(id)] = position
             entitySimulation.update(id: Int64(id)) { entity in
                 entity.remotePosition = SIMD3<Double>(position) / 32 + SIMD3(0, 1.0 / 64, 0)
-                entity.remoteYaw = networkYaw(yaw)
-                entity.remotePitch = networkPitch(pitch)
+                entity.remoteYaw = networkYaw(yaw, projectile: entity.hasProjectileRotation)
+                entity.remotePitch = networkPitch(pitch, projectile: entity.hasProjectileRotation)
                 entity.remoteTicks = 3
             }
         case .entityVelocity(let id, let velocity):
@@ -116,6 +115,7 @@ extension GameSession {
             entitySimulation.remove(ids: [Int64(id)])
             state.fixedPositions.removeValue(forKey: Int64(id))
         case .entityStatus(let id, let status):
+            if id == state.localEntityID && status == 2 { player.animateHurt() }
             entitySimulation.update(id: Int64(id)) { entity in
                 if status == 2 {
                     entity.hurtTicks = 10
@@ -132,7 +132,7 @@ extension GameSession {
                 }
             }
         case .animation(let id, let animation):
-            if id == state.localEntityID && animation == 3 { sleepTicks = 0 }
+            if id == state.localEntityID && animation == 3 { wakeFromBed(setSpawn: false) }
             entitySimulation.update(id: Int64(id)) { entity in
                 if animation == 1 {
                     entity.attackCooldown = 6
@@ -151,9 +151,9 @@ extension GameSession {
             }
         case .sleep(let id, let mode, let position):
             if id == state.localEntityID && mode == 0 {
+                beginSleeping(at: position)
                 sleepTicks = 1
                 resetInput()
-                statusText = "Sleeping…"
             } else {
                 entitySimulation.update(id: Int64(id)) { $0.targetPosition = center(of: position) }
             }
@@ -166,15 +166,30 @@ extension GameSession {
         }
     }
 
+    private static let mobKinds: [UInt8: String] = [
+        50: "creeper", 51: "skeleton", 52: "spider", 53: "giant", 54: "zombie", 55: "slime",
+        56: "ghast", 57: "pigZombie", 90: "pig", 91: "sheep", 92: "cow", 93: "chicken", 94: "squid",
+        95: "wolf",
+    ]
+
+    private static let objectKinds: [Int8: String] = [
+        1: "boat", 10: "minecart", 11: "minecart", 12: "minecart", 50: "primedTnt", 60: "arrow",
+        61: "snowball", 62: "egg", 63: "fireball", 70: "fallingSand", 71: "fallingSand",
+        90: "fishingHook",
+    ]
+
     func remoteEntity(id: Int32, kind: String, position: SIMD3<Int32>) -> GameEntity {
         multiplayer?.fixedPositions[Int64(id)] = position
         return GameEntity(id: Int64(id), kind: kind, position: SIMD3<Double>(position) / 32)
     }
 
-    func networkYaw(_ angle: UInt8) -> Float {
-        Float(Int8(bitPattern: angle)) * Float(Double.pi) / 128 + Float(Double.pi)
+    func networkYaw(_ angle: UInt8, projectile: Bool = false) -> Float {
+        let angle = Float(Int8(bitPattern: angle)) * Float(Double.pi) / 128
+        return projectile ? Float(Double.pi) - angle : angle + Float(Double.pi)
     }
-    func networkPitch(_ angle: UInt8) -> Float { -Float(Int8(bitPattern: angle)) * Float(Double.pi) / 128 }
+    func networkPitch(_ angle: UInt8, projectile: Bool = false) -> Float {
+        Float(Int8(bitPattern: angle)) * Float(Double.pi) / 128 * (projectile ? 1 : -1)
+    }
 
     func moveRemote(id: Int32, delta: SIMD3<Int8>, yaw: UInt8? = nil, pitch: UInt8? = nil) {
         guard let state = multiplayer, let previous = state.fixedPositions[Int64(id)] else { return }
@@ -183,8 +198,10 @@ extension GameSession {
         entitySimulation.update(id: Int64(id)) { entity in
             entity.remotePosition = SIMD3<Double>(position) / 32
             entity.remoteTicks = 3
-            if let yaw { entity.remoteYaw = networkYaw(yaw) }
-            if let pitch { entity.remotePitch = networkPitch(pitch) }
+            if let yaw { entity.remoteYaw = networkYaw(yaw, projectile: entity.hasProjectileRotation) }
+            if let pitch {
+                entity.remotePitch = networkPitch(pitch, projectile: entity.hasProjectileRotation)
+            }
         }
     }
 

@@ -1,182 +1,179 @@
-import ImageIO
 import MinecraftCore
 import SwiftUI
 
 struct GameHUD: View {
     @ObservedObject var session: GameSession
+    @State private var achievementStarted = Date()
+
+    /// Between ticks only the debug position, pickup bounce, and achievement toast change per frame.
+    private var animatesEveryFrame: Bool {
+        session.showDebug || session.achievementNotice != nil
+            || session.hotbarPickupTicks.contains(where: { $0 > 0 })
+    }
 
     var body: some View {
-        ZStack {
-            if !session.inventoryOpen && !session.isPaused {
-                if let image = VanillaUISprites.sprite(
-                    "gui/icons.png", rect: CGRect(x: 0, y: 0, width: 16, height: 16))
-                {
-                    Image(decorative: image, scale: 1).resizable().interpolation(.none)
-                        .frame(width: 24, height: 24).allowsHitTesting(false)
-                } else {
-                    Text("+").font(.system(size: 22, weight: .light, design: .monospaced))
-                        .foregroundStyle(.white).allowsHitTesting(false)
-                }
-            }
-            VStack(spacing: 0) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Minecraft Beta 1.7.3 · Swift").fontWeight(.semibold)
-                        Text(session.positionText)
-                        if !session.statusText.isEmpty { Text(session.statusText) }
-                    }
-                    .font(.system(size: 11, design: .monospaced))
-                    .shadow(color: .black, radius: 1, x: 1, y: 1)
-                    .allowsHitTesting(false)
-                    Spacer()
-                    if let achievement = session.achievementNotice {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Achievement get!").foregroundStyle(.yellow)
-                            Text(achievement)
-                        }.font(.system(size: 12, design: .monospaced)).padding(12).background(
-                            .black.opacity(0.8))
+        TimelineView(.animation(paused: !animatesEveryFrame)) { _ in
+            BetaGUI(option: session.options.guiScale) { resolution in
+                ZStack(alignment: .topLeading) {
+                    if !session.hideHUD && !session.worldMenuOpen {
+                        hud(width: resolution.width, height: resolution.height)
+                        if session.showDebug { debugOverlay }
+                        if let title = session.achievementNotice {
+                            achievementToast(title).offset(
+                                x: CGFloat(resolution.width - 160), y: achievementOffset)
+                        }
                     }
                     #if os(iOS)
-                        HStack(spacing: 12) {
-                            Button {
-                                session.toggleInventory()
-                            } label: {
-                                Image(systemName: "square.grid.3x3.fill")
-                            }
-                            .accessibilityLabel("Inventory")
-                            if session.isMultiplayer {
+                        VStack {
+                            HStack(spacing: 12) {
+                                Spacer()
                                 Button {
-                                    session.beginChat()
+                                    session.toggleInventory()
                                 } label: {
-                                    Image(systemName: "bubble.left.fill")
-                                }.accessibilityLabel("Chat")
-                            }
-                            Button {
-                                session.togglePause()
-                            } label: {
-                                Image(systemName: "pause.fill")
-                            }
-                            .accessibilityLabel("Pause")
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 20))
-                    #endif
-                }
-                .padding(16)
-                Spacer()
-                if !session.inventoryOpen && !session.isPaused {
-                    VStack(spacing: 5) {
-                        #if os(macOS)
-                            if !session.isMouseCaptured {
-                                Text(
-                                    "Click to play · WASD move · Space jump · Shift sneak · E inventory · Esc pause"
-                                )
-                                .font(.system(size: 11)).padding(.bottom, 8)
-                                .shadow(color: .black, radius: 2)
-                            }
-                        #endif
-                        HStack {
-                            hearts
+                                    Image(systemName: "square.grid.3x3.fill")
+                                }
+                                if session.isMultiplayer {
+                                    Button {
+                                        session.beginChat()
+                                    } label: {
+                                        Image(systemName: "bubble.left.fill")
+                                    }
+                                }
+                                Button {
+                                    session.togglePause()
+                                } label: {
+                                    Image(systemName: "pause.fill")
+                                }
+                            }.font(.system(size: 16)).foregroundStyle(.white).buttonStyle(.plain).padding(10)
                             Spacer()
-                        }.frame(width: 360)
-                        hotbar
-                    }
-                    .padding(.bottom, 12)
-                }
-            }
-            .foregroundStyle(.white)
-        }
-    }
-
-    private var hearts: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<10) { index in
-                ZStack {
-                    heartSprite(x: 16, fallback: .black.opacity(0.6))
-                    if session.health >= (index + 1) * 2 {
-                        heartSprite(x: 52, fallback: .red)
-                    } else if session.health == index * 2 + 1 {
-                        heartSprite(x: 61, fallback: .red.opacity(0.6))
-                    }
-                }
-                .frame(width: 18, height: 18)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Health \(session.health) of 20")
-        .allowsHitTesting(false)
-    }
-
-    @ViewBuilder
-    private func heartSprite(x: CGFloat, fallback: Color) -> some View {
-        if let image = VanillaUISprites.sprite("gui/icons.png", rect: CGRect(x: x, y: 0, width: 9, height: 9))
-        {
-            Image(decorative: image, scale: 1).resizable().interpolation(.none)
-        } else {
-            Image(systemName: "heart.fill").resizable().foregroundStyle(fallback).padding(2)
-        }
-    }
-
-    private var hotbar: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<9) { index in
-                Button {
-                    session.selectHotbar(index)
-                } label: {
-                    GameItemIcon(
-                        stack: session.inventoryItems.indices.contains(index)
-                            ? session.inventoryItems[index] : nil,
-                        fallback: label(at: index), size: 36
-                    )
-                    .overlay {
-                        if index == session.selectedHotbar {
-                            Rectangle().stroke(.white, lineWidth: 2).padding(-2)
                         }
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Hotbar slot \(index + 1), \(label(at: index))")
-                .accessibilityAddTraits(index == session.selectedHotbar ? .isSelected : [])
+                    #endif
+                }.frame(
+                    width: CGFloat(resolution.width), height: CGFloat(resolution.height),
+                    alignment: .topLeading)
             }
         }
-        .padding(4)
-        .background {
-            if let image = VanillaUISprites.sprite(
-                "gui/gui.png", rect: CGRect(x: 0, y: 0, width: 182, height: 22))
-            {
-                Image(decorative: image, scale: 1).resizable().interpolation(.none)
-            } else {
-                Rectangle().fill(.black.opacity(0.65)).overlay { Rectangle().stroke(.gray, lineWidth: 2) }
-            }
+        .onAppear { configureTextures() }
+        .onChange(of: session.achievementNotice) { _, title in if title != nil { achievementStarted = Date() }
         }
+        .onChange(of: session.texturePackRevision) { _, _ in configureTextures() }
         #if os(macOS)
             .allowsHitTesting(false)
         #endif
     }
 
-    private func label(at index: Int) -> String {
-        session.hotbarLabels.indices.contains(index) ? session.hotbarLabels[index] : ""
-    }
-}
-
-@MainActor
-enum VanillaUISprites {
-    private static var images: [String: CGImage] = [:]
-    private static var crops: [String: CGImage] = [:]
-
-    static func sprite(_ name: String, rect: CGRect) -> CGImage? {
-        if images[name] == nil {
-            guard let resources = Bundle.main.resourceURL else { return nil }
-            let url = resources.appendingPathComponent("Vanilla").appendingPathComponent(name)
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-            else { return nil }
-            images[name] = image
+    private func hud(width: Int, height: Int) -> some View {
+        ZStack(alignment: .topLeading) {
+            BetaSprite(name: "gui/gui.png", rect: CGRect(x: 0, y: 0, width: 182, height: 22))
+                .offset(x: CGFloat(width / 2 - 91), y: CGFloat(height - 22))
+            BetaSprite(name: "gui/gui.png", rect: CGRect(x: 0, y: 22, width: 24, height: 22))
+                .offset(x: CGFloat(width / 2 - 92 + session.selectedHotbar * 20), y: CGFloat(height - 23))
+            BetaSprite(name: "gui/icons.png", rect: CGRect(x: 0, y: 0, width: 16, height: 16))
+                .blendMode(.difference).offset(x: CGFloat(width / 2 - 7), y: CGFloat(height / 2 - 7))
+            ForEach(0..<9) { index in
+                GameItemIcon(stack: item(index), size: 16, pickupAnimation: pickupAnimation(index))
+                    .offset(x: CGFloat(width / 2 - 88 + index * 20), y: CGFloat(height - 19))
+            }
+            ForEach(0..<10) { index in
+                heart(index: index).offset(
+                    x: CGFloat(width / 2 - 91 + index * 8), y: CGFloat(height - 32 + heartJitter(index)))
+                if session.armorPoints > 0 {
+                    BetaSprite(
+                        name: "gui/icons.png", rect: CGRect(x: armorIcon(index), y: 9, width: 9, height: 9)
+                    )
+                    .offset(x: CGFloat(width / 2 + 82 - index * 8), y: CGFloat(height - 32))
+                }
+            }
+            if session.isUnderwater {
+                let full = max(0, Int(ceil(Double(session.air - 2) * 10 / 300)))
+                let total = max(0, Int(ceil(Double(session.air) * 10 / 300)))
+                ForEach(0..<min(10, total), id: \.self) { index in
+                    BetaSprite(
+                        name: "gui/icons.png",
+                        rect: CGRect(x: index < full ? 16 : 25, y: 18, width: 9, height: 9)
+                    )
+                    .offset(x: CGFloat(width / 2 - 91 + index * 8), y: CGFloat(height - 41))
+                }
+            }
         }
-        let key = "\(name):\(rect.origin.x):\(rect.origin.y):\(rect.width):\(rect.height)"
-        if let cached = crops[key] { return cached }
-        let cropped = images[name]?.cropping(to: rect)
-        crops[key] = cropped
-        return cropped
+    }
+
+    private func heart(index: Int) -> some View {
+        let blink = session.healthFlashTime >= 10 && session.healthFlashTime / 3 % 2 == 1
+        return ZStack(alignment: .topLeading) {
+            BetaSprite(name: "gui/icons.png", rect: CGRect(x: blink ? 25 : 16, y: 0, width: 9, height: 9))
+            if blink && session.previousHealth > index * 2 {
+                BetaSprite(
+                    name: "gui/icons.png",
+                    rect: CGRect(
+                        x: session.previousHealth > index * 2 + 1 ? 70 : 79, y: 0, width: 9, height: 9))
+            }
+            if session.health > index * 2 {
+                BetaSprite(
+                    name: "gui/icons.png",
+                    rect: CGRect(x: session.health > index * 2 + 1 ? 52 : 61, y: 0, width: 9, height: 9))
+            }
+        }.frame(width: 9, height: 9)
+    }
+
+    private func armorIcon(_ index: Int) -> Int {
+        if index * 2 + 1 < session.armorPoints { return 34 }
+        return index * 2 + 1 == session.armorPoints ? 25 : 16
+    }
+
+    private func heartJitter(_ index: Int) -> Int {
+        guard session.health <= 4 else { return 0 }
+        var random = JavaRandom(seed: Int64(session.tickCount) &* 312871)
+        var value = 0
+        for _ in 0...index { value = random.nextInt(bound: 2) }
+        return value
+    }
+
+    private var debugOverlay: some View {
+        let position = session.cameraPositionDouble
+        return ZStack(alignment: .topLeading) {
+            BetaText("Minecraft Beta 1.7.3 (\(session.fps) fps)").offset(x: 2, y: 2)
+            BetaText("C: \(session.world.chunks.count) E: \(session.entities.count)").offset(x: 2, y: 12)
+            BetaText("x: \(position.x)", color: 0xE0E0E0).offset(x: 2, y: 64)
+            BetaText("y: \(position.y)", color: 0xE0E0E0).offset(x: 2, y: 72)
+            BetaText("z: \(position.z)", color: 0xE0E0E0).offset(x: 2, y: 80)
+            BetaText(
+                "f: \(Int(floor((session.camera.yaw * 180 / Float(Double.pi) - 180) / 90 + 0.5)) & 3)",
+                color: 0xE0E0E0
+            ).offset(x: 2, y: 88)
+        }
+    }
+
+    private func pickupAnimation(_ index: Int) -> Float {
+        guard session.hotbarPickupTicks.indices.contains(index) else { return 0 }
+        return max(0, Float(session.hotbarPickupTicks[index]) - session.accumulator / 0.05)
+    }
+
+    private var achievementOffset: CGFloat {
+        let elapsed = Date().timeIntervalSince(achievementStarted) / 3
+        guard elapsed >= 0 && elapsed <= 1 else { return -36 }
+        let triangular = elapsed > 0.5 ? 2 - elapsed * 2 : elapsed * 2
+        let hidden = max(0, 1 - triangular * 4)
+        return -CGFloat(Int(pow(hidden, 4) * 36))
+    }
+
+    private func achievementToast(_ title: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            BetaSprite(name: "achievement/bg.png", rect: CGRect(x: 96, y: 202, width: 160, height: 32))
+            BetaText("Achievement get!", color: 0xFFFF00, shadow: false).offset(x: 30, y: 7)
+            BetaText(title, shadow: false).offset(x: 30, y: 18)
+            if let achievement = Achievements.all.first(where: { $0.title == title }) {
+                GameItemIcon(stack: achievement.icon, size: 16).offset(x: 8, y: 8)
+            }
+        }
+    }
+
+    private func configureTextures() {
+        TextureResources.configure(overrideURL: session.texturePackURL, revision: session.texturePackRevision)
+        VanillaUISprites.reset()
+    }
+
+    private func item(_ index: Int) -> ItemStack? {
+        session.inventoryItems.indices.contains(index) ? session.inventoryItems[index] : nil
     }
 }
