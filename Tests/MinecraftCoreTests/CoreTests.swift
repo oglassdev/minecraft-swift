@@ -57,6 +57,7 @@ import Testing
     let first = BlockWorld.demo()
     #expect(first.blocks == BlockWorld.demo().blocks)
     #expect(first[BlockPosition(3, 1, 1)] == .wood)
-    #expect(first[BlockPosition(0, -2, 0)] == .stone)
+    #expect(first[BlockPosition(-5, 0, -5)] == .stone)
+    #expect(first[BlockPosition(0, -1, 0)] == nil)
     #expect(first[BlockPosition(100, 0, 0)] == nil)
 }

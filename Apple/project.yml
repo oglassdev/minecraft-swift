@@ -22,6 +22,9 @@ targets:
     sources:
       - Shared
       - macOS
+      - path: Resources/Vanilla
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: MinecraftCore
         product: MinecraftCore
@@ -39,6 +42,9 @@ targets:
     sources:
       - Shared
       - iOS
+      - path: Resources/Vanilla
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: MinecraftCore
         product: MinecraftCore
@@ -49,6 +55,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_CFBundleDisplayName: Minecraft Swift
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to Minecraft Beta servers on your local network.
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
 schemes:
   MinecraftMac:

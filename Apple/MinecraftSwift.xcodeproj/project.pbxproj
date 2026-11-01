@@ -7,30 +7,123 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		06B72F5B77B8FBB37B19CB60 /* GameSessionActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BFB4D6E80AA4C2B0BF1D9D /* GameSessionActions.swift */; };
+		0A2C7D5E10DEF1F5649CFF4A /* EntityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10F224F09B717F6742CD632 /* EntityModels.swift */; };
+		0F5D5F0623B8CDF4A0501E39 /* FirstPersonRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA89111D268C10CE8675373 /* FirstPersonRenderer.swift */; };
+		16F05BE181F18CD6ECD1CCA0 /* EntityRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAD415ABDD4FFEC1A834699 /* EntityRenderer.swift */; };
+		1784AB884C1222CEE83F0702 /* WorldEffectsRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB5FEADAA6F32460CE2EF882 /* WorldEffectsRenderer.swift */; };
 		18C35C021AB2979617AD5014 /* Blocks.metal in Sources */ = {isa = PBXBuildFile; fileRef = 14AFACAE47C97230F4E5A241 /* Blocks.metal */; };
+		19F5D981CC33CE1D3BAA777A /* GamePanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F44369D2982F190F61E538 /* GamePanels.swift */; };
 		1AD528C8C2C2F2CC4E923C15 /* Blocks.metal in Sources */ = {isa = PBXBuildFile; fileRef = 14AFACAE47C97230F4E5A241 /* Blocks.metal */; };
+		1C770B3DBCBCC0082F1492E4 /* BetaSky.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD7A8C8F78CE34D2EAD76117 /* BetaSky.swift */; };
+		28E1F7511CEC598F652F008C /* AudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4C44FD90C02D8506FF0FE2 /* AudioManager.swift */; };
+		29FD64ABEB786772190EC8DD /* MultiplayerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B943A17BCA4DDBD16BDCE7 /* MultiplayerClient.swift */; };
+		2F70F3B81AEA6845CFDD1EDB /* VanillaTextures.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C8E619EB5E1F305AF5C691 /* VanillaTextures.swift */; };
+		31525E4F02B13460F9C02C83 /* GameTextPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190CF94918EEC9394657CCC2 /* GameTextPanels.swift */; };
+		33AFFF26CBF3C65A023EE426 /* GameSessionStatistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D07998BDDE3B3FFB71FC1383 /* GameSessionStatistics.swift */; };
+		38D576D64D7EA2101C852F94 /* GameSessionLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E85DCCA874D2308914DB55 /* GameSessionLibrary.swift */; };
 		3A2586AE71DC775373CCF9E2 /* MinecraftApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */; };
+		3E3EC31AEE5378BC27C8AEB8 /* GameSessionLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E85DCCA874D2308914DB55 /* GameSessionLibrary.swift */; };
+		4078F0ECC3B651D186516D7C /* TranslucentSort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9477ED598CDD07818DED624D /* TranslucentSort.swift */; };
+		40EDB8B0D7828DF8CFCC3C1B /* LiquidTextureAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CBB5433290AECD381CD992 /* LiquidTextureAnimation.swift */; };
+		45B5F30FF8A325B497448576 /* EntityDecorationGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984FC3D736418E99505EC426 /* EntityDecorationGeometry.swift */; };
 		4633328B02CEC0B9B094720A /* MetalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F4B952F8A1CF818887F68F /* MetalSurface.swift */; };
+		4FB8813B45F197CACB7F1B6F /* GameSessionRespawn.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF78DBBA4EA72528D8AA2FAF /* GameSessionRespawn.swift */; };
+		503527CFDE769968B840509E /* WorldLibraryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A67CF778017269B7BAFFD7C /* WorldLibraryPanel.swift */; };
+		56FC11D208261BA9ACCE9E09 /* FirstPersonRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA89111D268C10CE8675373 /* FirstPersonRenderer.swift */; };
+		59623DA79D0E745FC4A5A4EA /* GameSessionStatistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D07998BDDE3B3FFB71FC1383 /* GameSessionStatistics.swift */; };
+		5B07FBCC82B5F6D6CE5407AD /* WorldLibraryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A67CF778017269B7BAFFD7C /* WorldLibraryPanel.swift */; };
 		5C4F1FE62E0B4193EA886870 /* MinecraftApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */; };
+		5C7C69BA9363F40E19D78B2B /* Vanilla in Resources */ = {isa = PBXBuildFile; fileRef = 9E7AA442A2676F112A3D6D6C /* Vanilla */; };
+		5F99D766622843C6615BF66B /* WorldEffectsRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB5FEADAA6F32460CE2EF882 /* WorldEffectsRenderer.swift */; };
+		65087FE3DE67BA27FCA32FBA /* GameSessionRespawn.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF78DBBA4EA72528D8AA2FAF /* GameSessionRespawn.swift */; };
+		6835FD80088129F5B4032D80 /* RenderMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09A3900C1FBE8B2563CB36AB /* RenderMotion.swift */; };
+		68AB40E5EC902C1FDFE9713C /* GamePanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F44369D2982F190F61E538 /* GamePanels.swift */; };
+		6A4642257FA9928F0AA4F34A /* RenderFrustum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A5026F5F1C52082574F5CC /* RenderFrustum.swift */; };
 		6B1E85182533B1E9354F0116 /* GameSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17B87F7A60AE76D4378605FE /* GameSession.swift */; };
+		6B55251E01807B5A7C19C1A3 /* SignGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19F427419986C492B699E2D /* SignGeometry.swift */; };
+		6BEFF93C9142515F443BCB34 /* EntityRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAD415ABDD4FFEC1A834699 /* EntityRenderer.swift */; };
+		6C13A0310BA6D379D193E716 /* RenderFrustum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A5026F5F1C52082574F5CC /* RenderFrustum.swift */; };
+		6F97F9F82F7C0F0C6E79D7A4 /* StatisticsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F5AB07EEFDA27F80AB0B54 /* StatisticsPanel.swift */; };
+		72A8CDD2F57CB302A4BCABB5 /* EntityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10F224F09B717F6742CD632 /* EntityModels.swift */; };
+		775373C1741E633302527FDF /* SignGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19F427419986C492B699E2D /* SignGeometry.swift */; };
+		7BB720CA1EBD0DCAC9FA358A /* TranslucentSort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9477ED598CDD07818DED624D /* TranslucentSort.swift */; };
+		81E48D3B6B1770B02DB88F8C /* GameHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3462CE9194AEE6835A223C1 /* GameHUD.swift */; };
+		826FF15EA420633ED86FC4A8 /* GameItemIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935FA144C9B0DEEE548E0CF3 /* GameItemIcon.swift */; };
+		842BAE9A7CED5BBFC51D811D /* GameSessionWindows.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB9F9E61233D3CAB14B7CFEB /* GameSessionWindows.swift */; };
+		8938155731C51FF7A9594228 /* GameSessionEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD8E3C50DC100089DBB73965 /* GameSessionEntities.swift */; };
+		8A2D0CDDF1DF30CC9F4C1F45 /* GameSessionWindows.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB9F9E61233D3CAB14B7CFEB /* GameSessionWindows.swift */; };
+		8D0C49B6322FC91921320F1E /* MultiplayerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B943A17BCA4DDBD16BDCE7 /* MultiplayerClient.swift */; };
+		8D29A2DBC89A52DC25070535 /* VanillaTextures.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C8E619EB5E1F305AF5C691 /* VanillaTextures.swift */; };
+		90DB86FE80491AF01B3ECFF4 /* GameSessionEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD8E3C50DC100089DBB73965 /* GameSessionEntities.swift */; };
+		91A8A3F832A47D8220050DFE /* GameSessionNetworking.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9F2C0B153539F39B855DB94 /* GameSessionNetworking.swift */; };
+		9B520004B9858F6D8D40E1AD /* AudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4C44FD90C02D8506FF0FE2 /* AudioManager.swift */; };
+		9BD76585C67F4FFD95DD4755 /* GameSessionWorld.swift in Sources */ = {isa = PBXBuildFile; fileRef = 883906000C3FF82E2C53860A /* GameSessionWorld.swift */; };
+		9E0A38E9C69730DBE233E9FC /* GameSessionNetworking.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9F2C0B153539F39B855DB94 /* GameSessionNetworking.swift */; };
+		A0D36E29505DDE534C8F6546 /* GameSessionWorld.swift in Sources */ = {isa = PBXBuildFile; fileRef = 883906000C3FF82E2C53860A /* GameSessionWorld.swift */; };
+		A836A1D870162C3B1E097C61 /* ItemTextureAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 409A38898E0EE9112836C191 /* ItemTextureAnimation.swift */; };
+		A9E89FF11C9CCB74A33C8A90 /* GameSessionItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7216BFB3A94035C916023564 /* GameSessionItems.swift */; };
+		A9FEFF8CE4F123617ED9A3F2 /* StatisticsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F5AB07EEFDA27F80AB0B54 /* StatisticsPanel.swift */; };
+		AA95C3827DC3B1E82810D35D /* LiquidTextureAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CBB5433290AECD381CD992 /* LiquidTextureAnimation.swift */; };
 		ABB4C0DCE8CE14865B40B0BF /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D2162A2DA2B0D412AD28CF /* Renderer.swift */; };
 		B1D46576FF1815155501DB20 /* MinecraftCore in Frameworks */ = {isa = PBXBuildFile; productRef = CCCAFB8838AD6DFBB0FF4704 /* MinecraftCore */; };
+		B7D2418DBF3EC694622E8A48 /* GameTextPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190CF94918EEC9394657CCC2 /* GameTextPanels.swift */; };
+		BECA4FF06CF0D3072F280969 /* BetaSky.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD7A8C8F78CE34D2EAD76117 /* BetaSky.swift */; };
+		C1604C49E02C25D2E9105D28 /* EntityDecorationGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984FC3D736418E99505EC426 /* EntityDecorationGeometry.swift */; };
 		C813B40ECBDE87CB7B6282BF /* MetalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711268B74415EFF9FB5AB6FA /* MetalSurface.swift */; };
+		C8EBC1853A8D9D754D93054C /* GameSessionItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7216BFB3A94035C916023564 /* GameSessionItems.swift */; };
 		CF6C2A1A5A6B4E0C81BE05B3 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D2162A2DA2B0D412AD28CF /* Renderer.swift */; };
+		D1F45FF0E054B74967DD59FF /* GameItemIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935FA144C9B0DEEE548E0CF3 /* GameItemIcon.swift */; };
+		D51D5656AD0661847399A7CB /* GameSessionActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BFB4D6E80AA4C2B0BF1D9D /* GameSessionActions.swift */; };
+		E883F61EE1EFA8F57763EE41 /* GameHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3462CE9194AEE6835A223C1 /* GameHUD.swift */; };
 		E90F8374CFA5F76F769C38E8 /* GameSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17B87F7A60AE76D4378605FE /* GameSession.swift */; };
+		EE4841AAEAA9ABF7D7B14804 /* Vanilla in Resources */ = {isa = PBXBuildFile; fileRef = 9E7AA442A2676F112A3D6D6C /* Vanilla */; };
+		F1A22077DF93DE1709B40923 /* RenderMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09A3900C1FBE8B2563CB36AB /* RenderMotion.swift */; };
+		FE55785D261844F7A06EA690 /* ItemTextureAnimation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 409A38898E0EE9112836C191 /* ItemTextureAnimation.swift */; };
 		FF6BEA826F209311C3D8AAA7 /* MinecraftCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1109B45F7949CE15BDA70592 /* MinecraftCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		09A3900C1FBE8B2563CB36AB /* RenderMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderMotion.swift; sourceTree = "<group>"; };
+		12E85DCCA874D2308914DB55 /* GameSessionLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionLibrary.swift; sourceTree = "<group>"; };
 		14AFACAE47C97230F4E5A241 /* Blocks.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Blocks.metal; sourceTree = "<group>"; };
 		17B87F7A60AE76D4378605FE /* GameSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSession.swift; sourceTree = "<group>"; };
+		190CF94918EEC9394657CCC2 /* GameTextPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameTextPanels.swift; sourceTree = "<group>"; };
+		1CAD415ABDD4FFEC1A834699 /* EntityRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityRenderer.swift; sourceTree = "<group>"; };
+		26A5026F5F1C52082574F5CC /* RenderFrustum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderFrustum.swift; sourceTree = "<group>"; };
+		27BFB4D6E80AA4C2B0BF1D9D /* GameSessionActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionActions.swift; sourceTree = "<group>"; };
 		28D2162A2DA2B0D412AD28CF /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
 		2B2F57B5C9AEB26B02514B31 /* MinecraftSwift.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MinecraftSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		34F44369D2982F190F61E538 /* GamePanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GamePanels.swift; sourceTree = "<group>"; };
+		409A38898E0EE9112836C191 /* ItemTextureAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemTextureAnimation.swift; sourceTree = "<group>"; };
 		5981FC4FBEFE68284120C6D4 /* minecraft-swift */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "minecraft-swift"; path = ..; sourceTree = SOURCE_ROOT; };
+		5A67CF778017269B7BAFFD7C /* WorldLibraryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldLibraryPanel.swift; sourceTree = "<group>"; };
 		711268B74415EFF9FB5AB6FA /* MetalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalSurface.swift; sourceTree = "<group>"; };
+		7216BFB3A94035C916023564 /* GameSessionItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionItems.swift; sourceTree = "<group>"; };
+		883906000C3FF82E2C53860A /* GameSessionWorld.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionWorld.swift; sourceTree = "<group>"; };
+		935FA144C9B0DEEE548E0CF3 /* GameItemIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameItemIcon.swift; sourceTree = "<group>"; };
+		9477ED598CDD07818DED624D /* TranslucentSort.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslucentSort.swift; sourceTree = "<group>"; };
+		984FC3D736418E99505EC426 /* EntityDecorationGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityDecorationGeometry.swift; sourceTree = "<group>"; };
+		9E7AA442A2676F112A3D6D6C /* Vanilla */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Vanilla; path = Resources/Vanilla; sourceTree = SOURCE_ROOT; };
 		A2CDE077C979AF2F22C87CF6 /* MinecraftSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MinecraftSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A8F5AB07EEFDA27F80AB0B54 /* StatisticsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatisticsPanel.swift; sourceTree = "<group>"; };
+		AB4C44FD90C02D8506FF0FE2 /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
+		AB5FEADAA6F32460CE2EF882 /* WorldEffectsRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldEffectsRenderer.swift; sourceTree = "<group>"; };
 		AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinecraftApp.swift; sourceTree = "<group>"; };
+		BD7A8C8F78CE34D2EAD76117 /* BetaSky.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BetaSky.swift; sourceTree = "<group>"; };
+		BD8E3C50DC100089DBB73965 /* GameSessionEntities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionEntities.swift; sourceTree = "<group>"; };
+		C3CBB5433290AECD381CD992 /* LiquidTextureAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidTextureAnimation.swift; sourceTree = "<group>"; };
+		C9F2C0B153539F39B855DB94 /* GameSessionNetworking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionNetworking.swift; sourceTree = "<group>"; };
+		CF78DBBA4EA72528D8AA2FAF /* GameSessionRespawn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionRespawn.swift; sourceTree = "<group>"; };
+		D07998BDDE3B3FFB71FC1383 /* GameSessionStatistics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionStatistics.swift; sourceTree = "<group>"; };
+		D19F427419986C492B699E2D /* SignGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignGeometry.swift; sourceTree = "<group>"; };
 		D1F4B952F8A1CF818887F68F /* MetalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalSurface.swift; sourceTree = "<group>"; };
+		D3462CE9194AEE6835A223C1 /* GameHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameHUD.swift; sourceTree = "<group>"; };
+		D5B943A17BCA4DDBD16BDCE7 /* MultiplayerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplayerClient.swift; sourceTree = "<group>"; };
+		DB9F9E61233D3CAB14B7CFEB /* GameSessionWindows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSessionWindows.swift; sourceTree = "<group>"; };
+		EAA89111D268C10CE8675373 /* FirstPersonRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPersonRenderer.swift; sourceTree = "<group>"; };
+		F10F224F09B717F6742CD632 /* EntityModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityModels.swift; sourceTree = "<group>"; };
+		F9C8E619EB5E1F305AF5C691 /* VanillaTextures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VanillaTextures.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,15 +163,69 @@
 			path = iOS;
 			sourceTree = "<group>";
 		};
+		14FEC2660BD83DF0AA99C244 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				D3462CE9194AEE6835A223C1 /* GameHUD.swift */,
+				935FA144C9B0DEEE548E0CF3 /* GameItemIcon.swift */,
+				34F44369D2982F190F61E538 /* GamePanels.swift */,
+				190CF94918EEC9394657CCC2 /* GameTextPanels.swift */,
+				A8F5AB07EEFDA27F80AB0B54 /* StatisticsPanel.swift */,
+				5A67CF778017269B7BAFFD7C /* WorldLibraryPanel.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		4C81749A811CAEA41D56DFCC /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				27BFB4D6E80AA4C2B0BF1D9D /* GameSessionActions.swift */,
+				BD8E3C50DC100089DBB73965 /* GameSessionEntities.swift */,
+				C9F2C0B153539F39B855DB94 /* GameSessionNetworking.swift */,
+				DB9F9E61233D3CAB14B7CFEB /* GameSessionWindows.swift */,
+				D5B943A17BCA4DDBD16BDCE7 /* MultiplayerClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
 		64B0CC7CB9D1BD9FDA5FF447 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				BD7A8C8F78CE34D2EAD76117 /* BetaSky.swift */,
 				14AFACAE47C97230F4E5A241 /* Blocks.metal */,
+				984FC3D736418E99505EC426 /* EntityDecorationGeometry.swift */,
+				F10F224F09B717F6742CD632 /* EntityModels.swift */,
+				1CAD415ABDD4FFEC1A834699 /* EntityRenderer.swift */,
+				EAA89111D268C10CE8675373 /* FirstPersonRenderer.swift */,
 				17B87F7A60AE76D4378605FE /* GameSession.swift */,
+				7216BFB3A94035C916023564 /* GameSessionItems.swift */,
+				12E85DCCA874D2308914DB55 /* GameSessionLibrary.swift */,
+				CF78DBBA4EA72528D8AA2FAF /* GameSessionRespawn.swift */,
+				D07998BDDE3B3FFB71FC1383 /* GameSessionStatistics.swift */,
+				883906000C3FF82E2C53860A /* GameSessionWorld.swift */,
+				409A38898E0EE9112836C191 /* ItemTextureAnimation.swift */,
+				C3CBB5433290AECD381CD992 /* LiquidTextureAnimation.swift */,
 				AD5DB12B76063AD0AB314DDD /* MinecraftApp.swift */,
 				28D2162A2DA2B0D412AD28CF /* Renderer.swift */,
+				26A5026F5F1C52082574F5CC /* RenderFrustum.swift */,
+				09A3900C1FBE8B2563CB36AB /* RenderMotion.swift */,
+				D19F427419986C492B699E2D /* SignGeometry.swift */,
+				9477ED598CDD07818DED624D /* TranslucentSort.swift */,
+				F9C8E619EB5E1F305AF5C691 /* VanillaTextures.swift */,
+				AB5FEADAA6F32460CE2EF882 /* WorldEffectsRenderer.swift */,
+				A13A0B84B681D2B644E26022 /* Audio */,
+				4C81749A811CAEA41D56DFCC /* Networking */,
+				14FEC2660BD83DF0AA99C244 /* UI */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		A13A0B84B681D2B644E26022 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				AB4C44FD90C02D8506FF0FE2 /* AudioManager.swift */,
+			);
+			path = Audio;
 			sourceTree = "<group>";
 		};
 		CF702CE4C08552933E27E4EB /* macOS */ = {
@@ -100,6 +247,7 @@
 		FEC975BA729C1EA676410296 = {
 			isa = PBXGroup;
 			children = (
+				9E7AA442A2676F112A3D6D6C /* Vanilla */,
 				14C21291693776C00B5DAA4D /* iOS */,
 				CF702CE4C08552933E27E4EB /* macOS */,
 				F0AD3FB2018B17325C48CB8C /* Packages */,
@@ -116,6 +264,7 @@
 			buildConfigurationList = 25537AE6D07B4E99AD058C18 /* Build configuration list for PBXNativeTarget "MinecraftIOS" */;
 			buildPhases = (
 				0DEAB77EBA19F9833DC43E7A /* Sources */,
+				66171B006E7FA54BE9BCDE6A /* Resources */,
 				91E4E9C64A5E0C47C72FC1F3 /* Frameworks */,
 			);
 			buildRules = (
@@ -135,6 +284,7 @@
 			buildConfigurationList = 4C63972AA9F88A8724D51230 /* Build configuration list for PBXNativeTarget "MinecraftMac" */;
 			buildPhases = (
 				47BF2B78CE62587B75BCEF8E /* Sources */,
+				148DA2541B13EC4C92616B77 /* Resources */,
 				7E522B2EEBDFA1D39A6B8A6A /* Frameworks */,
 			);
 			buildRules = (
@@ -183,16 +333,65 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		148DA2541B13EC4C92616B77 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE4841AAEAA9ABF7D7B14804 /* Vanilla in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		66171B006E7FA54BE9BCDE6A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5C7C69BA9363F40E19D78B2B /* Vanilla in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		0DEAB77EBA19F9833DC43E7A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B520004B9858F6D8D40E1AD /* AudioManager.swift in Sources */,
+				1C770B3DBCBCC0082F1492E4 /* BetaSky.swift in Sources */,
 				18C35C021AB2979617AD5014 /* Blocks.metal in Sources */,
+				45B5F30FF8A325B497448576 /* EntityDecorationGeometry.swift in Sources */,
+				72A8CDD2F57CB302A4BCABB5 /* EntityModels.swift in Sources */,
+				16F05BE181F18CD6ECD1CCA0 /* EntityRenderer.swift in Sources */,
+				56FC11D208261BA9ACCE9E09 /* FirstPersonRenderer.swift in Sources */,
+				E883F61EE1EFA8F57763EE41 /* GameHUD.swift in Sources */,
+				826FF15EA420633ED86FC4A8 /* GameItemIcon.swift in Sources */,
+				19F5D981CC33CE1D3BAA777A /* GamePanels.swift in Sources */,
 				E90F8374CFA5F76F769C38E8 /* GameSession.swift in Sources */,
+				06B72F5B77B8FBB37B19CB60 /* GameSessionActions.swift in Sources */,
+				8938155731C51FF7A9594228 /* GameSessionEntities.swift in Sources */,
+				A9E89FF11C9CCB74A33C8A90 /* GameSessionItems.swift in Sources */,
+				3E3EC31AEE5378BC27C8AEB8 /* GameSessionLibrary.swift in Sources */,
+				9E0A38E9C69730DBE233E9FC /* GameSessionNetworking.swift in Sources */,
+				65087FE3DE67BA27FCA32FBA /* GameSessionRespawn.swift in Sources */,
+				33AFFF26CBF3C65A023EE426 /* GameSessionStatistics.swift in Sources */,
+				8A2D0CDDF1DF30CC9F4C1F45 /* GameSessionWindows.swift in Sources */,
+				9BD76585C67F4FFD95DD4755 /* GameSessionWorld.swift in Sources */,
+				31525E4F02B13460F9C02C83 /* GameTextPanels.swift in Sources */,
+				FE55785D261844F7A06EA690 /* ItemTextureAnimation.swift in Sources */,
+				AA95C3827DC3B1E82810D35D /* LiquidTextureAnimation.swift in Sources */,
 				C813B40ECBDE87CB7B6282BF /* MetalSurface.swift in Sources */,
 				5C4F1FE62E0B4193EA886870 /* MinecraftApp.swift in Sources */,
+				8D0C49B6322FC91921320F1E /* MultiplayerClient.swift in Sources */,
+				6A4642257FA9928F0AA4F34A /* RenderFrustum.swift in Sources */,
+				F1A22077DF93DE1709B40923 /* RenderMotion.swift in Sources */,
 				ABB4C0DCE8CE14865B40B0BF /* Renderer.swift in Sources */,
+				6B55251E01807B5A7C19C1A3 /* SignGeometry.swift in Sources */,
+				6F97F9F82F7C0F0C6E79D7A4 /* StatisticsPanel.swift in Sources */,
+				4078F0ECC3B651D186516D7C /* TranslucentSort.swift in Sources */,
+				2F70F3B81AEA6845CFDD1EDB /* VanillaTextures.swift in Sources */,
+				1784AB884C1222CEE83F0702 /* WorldEffectsRenderer.swift in Sources */,
+				5B07FBCC82B5F6D6CE5407AD /* WorldLibraryPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,11 +399,41 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				28E1F7511CEC598F652F008C /* AudioManager.swift in Sources */,
+				BECA4FF06CF0D3072F280969 /* BetaSky.swift in Sources */,
 				1AD528C8C2C2F2CC4E923C15 /* Blocks.metal in Sources */,
+				C1604C49E02C25D2E9105D28 /* EntityDecorationGeometry.swift in Sources */,
+				0A2C7D5E10DEF1F5649CFF4A /* EntityModels.swift in Sources */,
+				6BEFF93C9142515F443BCB34 /* EntityRenderer.swift in Sources */,
+				0F5D5F0623B8CDF4A0501E39 /* FirstPersonRenderer.swift in Sources */,
+				81E48D3B6B1770B02DB88F8C /* GameHUD.swift in Sources */,
+				D1F45FF0E054B74967DD59FF /* GameItemIcon.swift in Sources */,
+				68AB40E5EC902C1FDFE9713C /* GamePanels.swift in Sources */,
 				6B1E85182533B1E9354F0116 /* GameSession.swift in Sources */,
+				D51D5656AD0661847399A7CB /* GameSessionActions.swift in Sources */,
+				90DB86FE80491AF01B3ECFF4 /* GameSessionEntities.swift in Sources */,
+				C8EBC1853A8D9D754D93054C /* GameSessionItems.swift in Sources */,
+				38D576D64D7EA2101C852F94 /* GameSessionLibrary.swift in Sources */,
+				91A8A3F832A47D8220050DFE /* GameSessionNetworking.swift in Sources */,
+				4FB8813B45F197CACB7F1B6F /* GameSessionRespawn.swift in Sources */,
+				59623DA79D0E745FC4A5A4EA /* GameSessionStatistics.swift in Sources */,
+				842BAE9A7CED5BBFC51D811D /* GameSessionWindows.swift in Sources */,
+				A0D36E29505DDE534C8F6546 /* GameSessionWorld.swift in Sources */,
+				B7D2418DBF3EC694622E8A48 /* GameTextPanels.swift in Sources */,
+				A836A1D870162C3B1E097C61 /* ItemTextureAnimation.swift in Sources */,
+				40EDB8B0D7828DF8CFCC3C1B /* LiquidTextureAnimation.swift in Sources */,
 				4633328B02CEC0B9B094720A /* MetalSurface.swift in Sources */,
 				3A2586AE71DC775373CCF9E2 /* MinecraftApp.swift in Sources */,
+				29FD64ABEB786772190EC8DD /* MultiplayerClient.swift in Sources */,
+				6C13A0310BA6D379D193E716 /* RenderFrustum.swift in Sources */,
+				6835FD80088129F5B4032D80 /* RenderMotion.swift in Sources */,
 				CF6C2A1A5A6B4E0C81BE05B3 /* Renderer.swift in Sources */,
+				775373C1741E633302527FDF /* SignGeometry.swift in Sources */,
+				A9FEFF8CE4F123617ED9A3F2 /* StatisticsPanel.swift in Sources */,
+				7BB720CA1EBD0DCAC9FA358A /* TranslucentSort.swift in Sources */,
+				8D29A2DBC89A52DC25070535 /* VanillaTextures.swift in Sources */,
+				5F99D766622843C6615BF66B /* WorldEffectsRenderer.swift in Sources */,
+				503527CFDE769968B840509E /* WorldLibraryPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,6 +542,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to Minecraft Beta servers on your local network.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -332,6 +562,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_CFBundleDisplayName = "Minecraft Swift";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to Minecraft Beta servers on your local network.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (

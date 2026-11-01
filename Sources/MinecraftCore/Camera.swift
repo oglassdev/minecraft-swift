@@ -41,6 +41,8 @@ public struct Camera: Sendable {
         pitch = min(max(pitch + vertical, -Self.pitchLimit), Self.pitchLimit)
     }
 
+    public mutating func setPosition(_ position: SIMD3<Float>) { self.position = position }
+
     public mutating func move(_ input: MovementInput, deltaTime: Float) {
         let right = SIMD3<Float>(cos(yaw), 0, sin(yaw))
         var direction = forward * input.forward + right * input.right
