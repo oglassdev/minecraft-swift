@@ -78,6 +78,41 @@ private struct TextureAtlasReference: Decodable {
     #expect(positive.opaqueVertices.count == 30)
 }
 
+private struct BedGeometryCase: Decodable {
+    var metadata: UInt8
+    var blockedFace: Int
+    var vertices: [[Float]]
+}
+
+@Test func bedGeometryMatchesOriginalForEveryOrientationAndNeighbor() throws {
+    let url = try #require(Bundle.module.url(forResource: "BedGeometry", withExtension: "json"))
+    let cases = try JSONDecoder().decode([BedGeometryCase].self, from: Data(contentsOf: url))
+    let position = BlockPosition(0, 64, 0)
+    for reference in cases {
+        var world = BlockWorld()
+        world.setBlock(BlockState(.bed, metadata: reference.metadata), at: position)
+        if let face = BlockFace(rawValue: reference.blockedFace) {
+            let offset = face.offset
+            world[BlockPosition(position.x + offset.x, position.y + offset.y, position.z + offset.z)] = .stone
+        }
+        let vertices = BlockMesh(world: world, blockAt: position, relativeTo: position).cutoutVertices
+        #expect(vertices.count / 6 == reference.vertices.count / 4)
+        for quad in 0..<(reference.vertices.count / 4) {
+            let actual = vertices[(quad * 6)..<(quad * 6 + 6)]
+            for expected in reference.vertices[(quad * 4)..<(quad * 4 + 4)] {
+                #expect(
+                    actual.contains { vertex in
+                        let values = [
+                            vertex.position.x, vertex.position.y, vertex.position.z,
+                            vertex.uv.x, vertex.uv.y, vertex.color.x, vertex.color.y, vertex.color.z,
+                        ]
+                        return zip(values, expected).allSatisfy { abs($0.0 - $0.1) < 0.000001 }
+                    })
+            }
+        }
+    }
+}
+
 @Test func meshSeparatesCutoutsAndLiquids() {
     var world = BlockWorld()
     world[BlockPosition(0, 1, 0)] = .glass

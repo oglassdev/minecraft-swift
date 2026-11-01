@@ -356,6 +356,7 @@ private struct MeshBuilder {
             return
         }
         switch id {
+        case 26: appendBed(position: position, state: state)
         case 6, 30, 31, 32, 37...40, 51, 59, 83: appendCross(position: position, state: state)
         case 27, 28, 55, 66: appendGroundPlane(position: position, state: state)
         case 65: appendLadder(position: position, state: state)
@@ -581,6 +582,48 @@ private struct MeshBuilder {
         6, 27, 28, 31, 32, 37, 38, 39, 40, 50, 51, 55, 59, 65, 66, 69, 75, 76, 77, 78,
         83, 90, 93, 94,
     ]
+
+    private mutating func appendBed(position: BlockPosition, state: BlockState) {
+        let direction = Int(state.metadata & 3)
+        let joins: [BlockFace] = [.south, .west, .north, .east]
+        let join = joins[direction]
+        let hidden = state.metadata & 8 == 0 ? join : BlockFace(rawValue: join.rawValue ^ 1)!
+        let mirrored: [BlockFace] = [.east, .south, .west, .north]
+        let topUV: [[SIMD2<Float>]] = [
+            [SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1), SIMD2(0, 0)],
+            [SIMD2(1, 1), SIMD2(0, 1), SIMD2(0, 0), SIMD2(1, 0)],
+            [SIMD2(0, 1), SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1)],
+            [SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1)],
+        ]
+        let offset = vector(position)
+        for face in BlockFace.allCases {
+            guard face != hidden else { continue }
+            if face.rawValue > 1 && isOccluded(position: position, state: state, face: face) { continue }
+            let points = face.corners.map { corner in
+                SIMD3(corner.x, face == .bottom ? 3.0 / 16 : corner.y * 9 / 16, corner.z)
+            }
+            var uv: [SIMD2<Float>]
+            switch face {
+            case .top: uv = topUV[direction]
+            case .bottom: uv = points.map { SIMD2($0.x, $0.z) }
+            default:
+                uv = points.map(face.textureCoordinates)
+                if face == mirrored[direction] { uv = uv.map { SIMD2(1 - $0.x, $0.y) } }
+            }
+            let tile = BlockAtlas.textureIndex(for: state, face: face)
+            let tileOrigin = SIMD2<Float>(Float(tile & 15), Float(tile >> 4)) * 16
+            let sample = world.light(at: face == .bottom ? position : position.adding(face.offset))
+            let light = sample.sky << 4 | sample.block
+            for index in [0, 1, 2, 0, 2, 3] {
+                let pixel = uv[index] * 16
+                cutout.append(
+                    BlockVertex(
+                        position: points[index] + offset, color: SIMD3(repeating: face.brightness),
+                        uv: (tileOrigin + SIMD2(min(pixel.x, 15.99), min(pixel.y, 15.99))) / 256,
+                        light: light))
+            }
+        }
+    }
 
     private mutating func appendBox(position: BlockPosition, state: BlockState, bounds: MeshBounds) {
         let smooth =

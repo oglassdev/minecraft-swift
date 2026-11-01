@@ -3,6 +3,7 @@ import ImageIO
 import MetalKit
 import MinecraftCore
 import UniformTypeIdentifiers
+import simd
 
 /// Compile with the shared Apple sources (except MinecraftApp.swift) and MinecraftCore.
 /// Arguments: asset directory, metallib, arrow oracle JSON, output directory.
@@ -57,6 +58,7 @@ struct PresentationProbe {
             URL: assets.appendingPathComponent("terrain.png"),
             options: [.origin: MTKTextureLoader.Origin.topLeft, .SRGB: false])
         TextureResources.configure(overrideURL: assets, revision: 1)
+        try verifyLeafCulling(device: device, queue: queue, library: library, atlas: atlas)
         let images = InventoryRenderImages.shared
         try images.configure(device: device, atlas: atlas, library: library, queue: queue)
         for scale in 1...4 {
@@ -78,6 +80,123 @@ struct PresentationProbe {
             try write(image, to: output.appendingPathComponent("player-scale-\(scale).png"))
         }
         print("Metal presentation: 32 icons and 4 player previews rendered at native GUI raster scales")
+    }
+
+    @MainActor
+    private static func verifyLeafCulling(
+        device: MTLDevice, queue: MTLCommandQueue, library: MTLLibrary, atlas: MTLTexture
+    ) throws {
+        guard MemoryLayout<Renderer.Uniforms>.stride == 144 else { throw failure("Uniform layout changed") }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "blockVertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "blockFragment")
+        descriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
+        descriptor.depthAttachmentPixelFormat = .depth32Float
+        let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        let depthDescriptor = MTLDepthStencilDescriptor()
+        depthDescriptor.depthCompareFunction = .lessEqual
+        depthDescriptor.isDepthWriteEnabled = true
+        guard let depth = device.makeDepthStencilState(descriptor: depthDescriptor) else {
+            throw failure("Missing depth state")
+        }
+        let size = 96
+        func render(_ vertices: [BlockVertex], eye: SIMD3<Float>, cull: MTLCullMode, leafRule: Bool) throws
+            -> [UInt8]
+        {
+            let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: size, height: size, mipmapped: false)
+            colorDescriptor.storageMode = .shared
+            colorDescriptor.usage = .renderTarget
+            let zDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
+            zDescriptor.usage = .renderTarget
+            guard let color = device.makeTexture(descriptor: colorDescriptor),
+                let z = device.makeTexture(descriptor: zDescriptor),
+                let buffer = device.makeSharedBuffer(vertices), let command = queue.makeCommandBuffer()
+            else { throw failure("Missing leaf render resources") }
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = color
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+            pass.depthAttachment.texture = z
+            pass.depthAttachment.loadAction = .clear
+            pass.depthAttachment.clearDepth = 1
+            let forward = simd_normalize(SIMD3<Float>(1, 0.5, 0.5) - eye)
+            let right = simd_normalize(simd_cross(forward, SIMD3(0, 1, 0)))
+            let up = simd_cross(right, forward)
+            let view = simd_float4x4(
+                columns: (
+                    SIMD4(right.x, up.x, -forward.x, 0), SIMD4(right.y, up.y, -forward.y, 0),
+                    SIMD4(right.z, up.z, -forward.z, 0),
+                    SIMD4(-simd_dot(right, eye), -simd_dot(up, eye), simd_dot(forward, eye), 1)
+                ))
+            let near: Float = 0.05
+            let far: Float = 64
+            let scale: Float = 1 / tan(Float.pi / 6)
+            let projection = simd_float4x4(
+                columns: (
+                    SIMD4(scale, 0, 0, 0), SIMD4(0, scale, 0, 0),
+                    SIMD4(0, 0, far / (near - far), -1), SIMD4(0, 0, far * near / (near - far), 0)
+                ))
+            var uniforms = Renderer.Uniforms(
+                viewProjection: projection * view, renderOffset: .zero, cameraPosition: eye,
+                fogColor: .zero, fogStart: 100, fogEnd: 200, skySubtraction: 0,
+                fogDensity: 0, ambientFloor: 0.05, cullLeaves: leafRule ? 1 : 0)
+            guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else {
+                throw failure("Missing render encoder")
+            }
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setDepthStencilState(depth)
+            encoder.setFrontFacing(.counterClockwise)
+            encoder.setCullMode(cull)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Renderer.Uniforms>.stride, index: 1)
+            encoder.setFragmentTexture(atlas, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+            encoder.endEncoding()
+            command.commit()
+            command.waitUntilCompleted()
+            if let error = command.error { throw error }
+            var pixels = [UInt8](repeating: 0, count: size * size * 4)
+            pixels.withUnsafeMutableBytes {
+                color.getBytes(
+                    $0.baseAddress!, bytesPerRow: size * 4,
+                    from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+            }
+            return pixels
+        }
+        var mismatchedOldPixels = 0
+        for metadata: UInt8 in 0...2 {
+            var world = BlockWorld()
+            world.setBlock(BlockState(.leaves, metadata: metadata), at: BlockPosition(0, 0, 0))
+            world.setBlock(BlockState(.leaves, metadata: (metadata + 1) % 3), at: BlockPosition(1, 0, 0))
+            let vertices = BlockMesh(world: world, options: BlockMeshOptions(smoothLighting: false))
+                .cutoutVertices
+            for step in 0..<8 {
+                let angle = Float(step) * Float.pi / 4 + 0.13
+                let eye = SIMD3<Float>(1 + sin(angle) * 3, 1.3, 0.5 + cos(angle) * 3)
+                let reference = try render(vertices, eye: eye, cull: .back, leafRule: false)
+                let fixed = try render(vertices, eye: eye, cull: .none, leafRule: true)
+                let old = try render(vertices, eye: eye, cull: .none, leafRule: false)
+                guard reference == fixed else {
+                    throw failure("Leaf back-face result differs from hardware culling")
+                }
+                guard stride(from: 3, to: reference.count, by: 4).contains(where: { reference[$0] > 0 })
+                else {
+                    throw failure("Empty leaf fixture")
+                }
+                mismatchedOldPixels +=
+                    stride(from: 0, to: old.count, by: 4).filter {
+                        old[$0..<($0 + 4)] != reference[$0..<($0 + 4)]
+                    }.count
+            }
+        }
+        guard mismatchedOldPixels > 0 else {
+            throw failure("Leaf fixture did not reproduce the old overlap bug")
+        }
+        print(
+            "Leaf culling: 24 views match hardware back-face culling; old renderer differed at \(mismatchedOldPixels) pixels"
+        )
     }
 
     @MainActor

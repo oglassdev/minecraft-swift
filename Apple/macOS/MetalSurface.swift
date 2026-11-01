@@ -31,10 +31,10 @@ final class MacMetalView: MTKView {
             guard let session else { return }
             Publishers.MergeMany(
                 session.$inventoryOpen, session.$isPaused, session.$chatOpen, session.$signEditorOpen,
-                session.$worldMenuOpen, session.$showDeathScreen
+                session.$worldMenuOpen, session.$showDeathScreen, session.$isLoading
             )
-            .filter { $0 }
-            .sink { [weak self] _ in self?.releaseMouse() }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.synchronizeMouseCapture() }
             .store(in: &subscriptions)
         }
     }
@@ -58,9 +58,14 @@ final class MacMetalView: MTKView {
             name: NSWindow.didResignKeyNotification, object: window
         )
         NotificationCenter.default.addObserver(
+            self, selector: #selector(synchronizeMouseCapture),
+            name: NSWindow.didBecomeKeyNotification, object: window
+        )
+        NotificationCenter.default.addObserver(
             self, selector: #selector(applicationWillTerminate),
             name: NSApplication.willTerminateNotification, object: nil
         )
+        synchronizeMouseCapture()
     }
 
     func disconnect() {
@@ -96,6 +101,14 @@ final class MacMetalView: MTKView {
         guard CGAssociateMouseAndMouseCursorPosition(0) == .success else { return }
         ownsMouseCapture = true
         NSCursor.hide()
+    }
+
+    @objc private func synchronizeMouseCapture() {
+        guard let session, !session.isInputBlocked, window?.isKeyWindow == true, NSApp.isActive else {
+            releaseMouse()
+            return
+        }
+        captureMouse()
     }
 
     @objc func releaseMouse() {

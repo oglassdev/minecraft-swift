@@ -20,6 +20,7 @@ struct Uniforms {
     float skySubtraction;
     float fogDensity;
     float ambientFloor;
+    uint cullLeaves;
 };
 
 struct VertexOutput {
@@ -32,6 +33,7 @@ struct VertexOutput {
     float3 fogColor;
     float2 fogRange;
     float fogDensity;
+    uint cullLeafBackFaces [[flat]];
 };
 
 vertex VertexOutput blockVertex(
@@ -58,10 +60,18 @@ vertex VertexOutput blockVertex(
     output.fogColor = uniforms.fogColor;
     output.fogRange = float2(uniforms.fogStart, uniforms.fogEnd);
     output.fogDensity = uniforms.fogDensity;
+    output.cullLeafBackFaces = 0;
+    if (uniforms.cullLeaves != 0) {
+        // Leaf blocks retain internal faces; crossed plant quads remain two-sided.
+        int2 tile = int2(floor(block.uv * 16));
+        output.cullLeafBackFaces = tile.x == 4 && (tile.y == 3 || tile.y == 8);
+    }
     return output;
 }
 
-fragment float4 blockFragment(VertexOutput input [[stage_in]], texture2d<float> atlas [[texture(0)]]) {
+fragment float4 blockFragment(VertexOutput input [[stage_in]], texture2d<float> atlas [[texture(0)]],
+    bool frontFacing [[front_facing]]) {
+    if (input.cullLeafBackFaces != 0 && !frontFacing) discard_fragment();
     constexpr sampler pixelSampler(coord::normalized, address::repeat, filter::nearest);
     float4 texel = mix(float4(1), atlas.sample(pixelSampler, input.uv), input.textureWeight);
     float opacity = texel.a * input.opacity;
@@ -128,6 +138,7 @@ vertex VertexOutput skyGeometryVertex(uint id [[vertex_id]],
     output.fogColor = uniforms.fogColor;
     output.fogRange = float2(uniforms.fogStart,uniforms.fogEnd);
     output.fogDensity = uniforms.fogDensity;
+    output.cullLeafBackFaces = 0;
     return output;
 }
 

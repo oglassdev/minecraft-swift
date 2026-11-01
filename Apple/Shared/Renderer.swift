@@ -99,6 +99,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         var skySubtraction: Float
         var fogDensity: Float
         var ambientFloor: Float
+        var cullLeaves: UInt32 = 0
     }
 
     enum SetupError: LocalizedError {
@@ -347,10 +348,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             draw(buffer: chunk.mesh.opaque, count: chunk.mesh.opaqueCount, encoder: encoder)
         }
         encoder.setCullMode(.none)
+        uniforms.cullLeaves = 1
         for chunk in visible {
             bind(offset: chunk.offset)
             draw(buffer: chunk.mesh.cutout, count: chunk.mesh.cutoutCount, encoder: encoder)
         }
+        uniforms.cullLeaves = 0
         bind(offset: .zero)
         var renderedEntities = session.entities
         if thirdPerson {

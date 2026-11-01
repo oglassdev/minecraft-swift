@@ -1,6 +1,6 @@
 # Minecraft Swift
 
-Private Swift and Metal port of **Minecraft Beta 1.7.3**, targeting macOS 14+ and
+Swift and Metal port of **Minecraft Beta 1.7.3**, targeting macOS 14+ and
 iOS 17+. The portable Swift package contains the world and simulation; both Apple apps
 share the Metal renderer and game session. This is a playable port under development,
 with substantial original-behavior coverage, not yet complete Beta parity.
@@ -160,4 +160,4 @@ reference code are ignored by Git; only authored Swift, tools, and numeric fixtu
 committed. The legacy audio index spans later releases too; the playback event table
 selects the Beta sounds.
 
-Repository: <https://github.com/oglassdev/minecraft-swift> (private).
+Repository: <https://github.com/oglassdev/minecraft-swift>.
